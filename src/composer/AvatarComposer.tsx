@@ -3,9 +3,11 @@ import { useGLTF } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { VRMLoaderPlugin, VRM, VRMUtils, VRMHumanBoneName } from '@pixiv/three-vrm'
 import * as THREE from 'three'
-import { BASE_URL, PART_TEST_URL, SPRING_PART_TEST_URL, PartStatus } from './constants'
+import { BASE_URL, MODULE_PARTS, PartStatus } from './constants'
 import { makeHairCap, makeShirtShell, attachHair, disposeObject } from './dummyParts'
 import { loadPart, loadSpringPart, LoadedPart, LoadedSpringPart } from './partLoader'
+
+type AnyLoadedPart = LoadedPart | LoadedSpringPart
 
 interface Props {
   hair: boolean
@@ -22,8 +24,7 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
   const vrmRef = useRef<VRM | null>(null)
   const hairRef = useRef<THREE.Object3D | null>(null)
   const shirtRef = useRef<THREE.SkinnedMesh | null>(null)
-  const partRef = useRef<LoadedPart | null>(null)
-  const springPartRef = useRef<LoadedSpringPart | null>(null)
+  const partsRef = useRef<Map<string, AnyLoadedPart>>(new Map())
   const waveRef = useRef(wave)
   waveRef.current = wave
   const partsVisibleRef = useRef(partsVisible)
@@ -67,73 +68,38 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
     const names = vrm.expressionManager?.expressions?.map((e) => e.expressionName) ?? []
     report.push(`③ 모프: expression ${names.length}종`)
 
-    // ④ 외부 authored GLB 파츠 로딩 + base 스켈레톤 rebind (PART_TEST_URL 설정 시에만)
+    // ④⑤ 모듈 파츠 레지스트리 순회 — 부위별 독립 로드·장착
     let cancelled = false
-    if (!PART_TEST_URL) {
-      report.push('④ 외부 GLB: 테스트 파츠 없음 (PART_TEST_URL 미설정)')
-      onReport([...report])
-      onPartStatus('tops', 'missing')
-    } else {
-      report.push('④ 외부 GLB: 로딩 중…')
-      onReport([...report])
-      onPartStatus('tops', 'loading')
-      loadPart(PART_TEST_URL, vrm)
-        .then((part) => {
-          if (cancelled) { part.dispose(); return }
-          partRef.current = part
-          part.skinned.forEach((m) => { m.visible = partsVisibleRef.current.tops }) // 현재 토글 반영
-          const miss = part.missingBones
-          if (part.skinned.length > 0) {
-            report[report.length - 1] = miss.length
-              ? `④ 외부 GLB: rebind ✅ but 누락 본 ${miss.length}개 ⚠️ (${miss.slice(0, 3).join(', ')}…) — ASSET_SPEC §1 위반`
-              : `④ 외부 GLB: 스킨드 ${part.skinned.length}메시 base 스켈레톤 rebind ✅`
-          } else {
-            report[report.length - 1] = `④ 외부 GLB: 리지드 파츠 ${part.rigid.length}개 head 부착 ✅`
-          }
+    onReport([...report])
+    MODULE_PARTS.forEach((part) => {
+      onPartStatus(part.id, 'loading')
+      const load = part.kind === 'spring' ? loadSpringPart : loadPart
+      load(part.url, vrm)
+        .then((loaded) => {
+          if (cancelled) { loaded.dispose(); return }
+          partsRef.current.set(part.id, loaded)
+          loaded.setVisible(partsVisibleRef.current[part.id] ?? true) // 현재 토글 반영
+          const miss = loaded.missingBones
+          report.push(
+            miss.length
+              ? `[${part.id}] ${part.label} 장착 ✅ but 누락 본 ${miss.length} ⚠️ (${miss.slice(0, 3).join(', ')}) — ASSET_SPEC §1`
+              : `[${part.id}] ${part.label} 장착 ✅ (${part.kind})`,
+          )
           onReport([...report])
-          onPartStatus('tops', 'loaded')
+          onPartStatus(part.id, 'loaded')
         })
         .catch((err) => {
           if (cancelled) return
-          report[report.length - 1] = `④ 외부 GLB: 로딩 실패 ❌ (${String(err).slice(0, 60)})`
+          report.push(`[${part.id}] ${part.label} 실패 ❌ (${String(err).slice(0, 50)})`)
           onReport([...report])
-          onPartStatus('tops', 'error')
+          onPartStatus(part.id, 'error')
         })
-    }
-
-    // ⑤ 스프링 헤어 VRM 로딩 + 본 이식 + 스프링 병합 (SPRING_PART_TEST_URL 설정 시에만)
-    if (!SPRING_PART_TEST_URL) {
-      report.push('⑤ 스프링 헤어: 테스트 파츠 없음 (미설정)')
-      onReport([...report])
-      onPartStatus('hair', 'missing')
-    } else {
-      const idx = report.push('⑤ 스프링 헤어: 로딩 중…') - 1
-      onReport([...report])
-      onPartStatus('hair', 'loading')
-      loadSpringPart(SPRING_PART_TEST_URL, vrm)
-        .then((sp) => {
-          if (cancelled) { sp.dispose(); return }
-          springPartRef.current = sp
-          if (sp.mesh) sp.mesh.visible = partsVisibleRef.current.hair // 현재 토글 반영
-          const miss = sp.missingBones
-          report[idx] = miss.length
-            ? `⑤ 스프링 헤어: 본 이식 ${sp.graftedBones.length}·스프링 ${sp.mergedJoints} 병합 ✅ but 누락 ${miss.length} ⚠️`
-            : `⑤ 스프링 헤어: 본 이식 ${sp.graftedBones.length}개 + 스프링 조인트 ${sp.mergedJoints}개 base 병합 ✅`
-          onReport([...report])
-          onPartStatus('hair', 'loaded')
-        })
-        .catch((err) => {
-          if (cancelled) return
-          report[idx] = `⑤ 스프링 헤어: 실패 ❌ (${String(err).slice(0, 60)})`
-          onReport([...report])
-          onPartStatus('hair', 'error')
-        })
-    }
+    })
 
     return () => {
       cancelled = true
-      if (springPartRef.current) { springPartRef.current.dispose(); springPartRef.current = null }
-      if (partRef.current) { partRef.current.dispose(); partRef.current = null }
+      partsRef.current.forEach((p) => p.dispose())
+      partsRef.current.clear()
       if (hairRef.current) { hairRef.current.removeFromParent(); disposeObject(hairRef.current); hairRef.current = null }
       if (shirtRef.current) { shirtRef.current.removeFromParent(); disposeObject(shirtRef.current); shirtRef.current = null }
       VRMUtils.deepDispose(vrm.scene)
@@ -145,8 +111,7 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
 
   // 모듈 파츠 가시성 토글 (디버그 패널 → 로드된 실제 파츠)
   useEffect(() => {
-    partRef.current?.skinned.forEach((m) => { m.visible = partsVisible.tops })
-    if (springPartRef.current?.mesh) springPartRef.current.mesh.visible = partsVisible.hair
+    MODULE_PARTS.forEach((part) => partsRef.current.get(part.id)?.setVisible(partsVisible[part.id] ?? true))
   }, [partsVisible])
 
   useEffect(() => {

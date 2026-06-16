@@ -15,8 +15,23 @@ export interface LoadedPart {
   root: THREE.Object3D // base scene 에 추가된 객체(또는 head 본에 부착된 리지드 루트)
   skinned: THREE.SkinnedMesh[] // base 스켈레톤으로 rebind 된 스킨드 메시
   rigid: THREE.Object3D[] // head 본 등에 리지드 부착된 객체
-  missingBones: string[] // base 에서 못 찾은 본 이름(파츠 규약 위반 신호)
+  missingBones: string[] // base 에서 못 찾은 '가중된' 본 이름(파츠 규약 위반 신호)
+  setVisible: (v: boolean) => void
   dispose: () => void
+}
+
+// 지오메트리에서 실제 가중(weight>0)된 본 인덱스 집합. skinIndex 는 skeleton.bones 배열 인덱스.
+function usedBoneIndices(geo: THREE.BufferGeometry): Set<number> {
+  const used = new Set<number>()
+  const idx = geo.getAttribute('skinIndex')
+  const wgt = geo.getAttribute('skinWeight')
+  if (!idx || !wgt) return used
+  for (let i = 0; i < idx.count; i++) {
+    for (let k = 0; k < 4; k++) {
+      if (wgt.getComponent(i, k) > 0) used.add(idx.getComponent(i, k))
+    }
+  }
+  return used
 }
 
 // base VRM 의 '원시 본'을 이름→Bone 으로 인덱싱. 파츠 스키닝이 참조하는 실제 본들이다.
@@ -39,11 +54,12 @@ function rebindToBase(
   missing: string[],
 ): void {
   const orig = sm.skeleton
-  const bones = orig.bones.map((b) => {
+  const used = usedBoneIndices(sm.geometry) // 미사용 본(VRoid 잔존 스프링 본 등)은 누락 보고 제외
+  const bones = orig.bones.map((b, i) => {
     const match = baseBoneByName.get(b.name)
     if (!match) {
-      missing.push(b.name)
-      return b // fallback: 원본 본 유지(검증 리포트가 위반을 드러내게)
+      if (used.has(i)) missing.push(b.name) // 가중된 본이 base 에 없을 때만 규약 위반
+      return b // fallback: 원본 본 유지
     }
     return match
   })
@@ -106,11 +122,17 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
     }
   }
 
+  const setVisible = (v: boolean) => {
+    skinned.forEach((m) => { m.visible = v })
+    rigid.forEach((r) => { r.visible = v })
+  }
+
   return {
     root: skinned.length > 0 ? baseVrm.scene : gltf.scene,
     skinned,
     rigid,
     missingBones,
+    setVisible,
     dispose,
   }
 }
@@ -130,6 +152,7 @@ export interface LoadedSpringPart {
   graftedBones: THREE.Object3D[] // base Head 아래로 이식된 헤어 스프링 본 루트
   mergedJoints: number // base 매니저에 병합된 스프링 조인트 수
   missingBones: string[]
+  setVisible: (v: boolean) => void
   dispose: () => void
 }
 
@@ -200,7 +223,9 @@ export async function loadSpringPart(url: string, baseVrm: VRM): Promise<LoadedS
     }
   }
 
-  return { mesh, graftedBones, mergedJoints, missingBones, dispose }
+  const setVisible = (v: boolean) => { if (mesh) (mesh as THREE.SkinnedMesh).visible = v }
+
+  return { mesh, graftedBones, mergedJoints, missingBones, setVisible, dispose }
 }
 
 // ─── ⑥ 옷밑 살 클리핑 (Hide_Body) — 마킹 채널 합의 후 ─────────────────────────
