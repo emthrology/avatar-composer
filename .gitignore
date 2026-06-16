@@ -7,6 +7,7 @@ dist/
 .vercel
 *.tsbuildinfo
 
-# 검증용 파생 스탠드인 — scripts/extractParts.mjs 로 male_sample.vrm 에서 재생성
-public/avatars/Tops_sample.glb
+# 파생 파츠 — scripts/extractParts.mjs 로 소스 VRM 에서 재생성 (prebuild 훅)
 public/avatars/Hair_sample.vrm
+public/avatars/male1/Tops_white_shirt.glb
+public/avatars/male1/Bottoms_scotch_pants.glb

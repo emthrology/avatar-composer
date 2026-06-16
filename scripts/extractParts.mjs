@@ -1,19 +1,28 @@
-// male_sample.vrm 에서 검증용 실측 파츠를 떼어낸다 (④/⑤ 스탠드인 생성기).
-//   Tops_sample.glb  — 상의. plain GLTFLoader 용, VRM 확장 제거. (④ 검증)
-//   Hair_sample.vrm  — 헤어. VRMLoaderPlugin 용, VRMC_springBone 보존(헤어 스프링만). (⑤ 검증)
+// VRoid 소스 VRM에서 부위별 파츠를 떼어낸다 (라이브러리 추출기).
+//   정적 의류(상의/하의/액세서리) → GLB (VRM 확장 제거, plain GLTFLoader 용)
+//   스프링 물리(흔들 헤어) → VRM (VRMC_springBone 보존, VRMLoaderPlugin 용)
 //
-// 방식: raw glTF 수술. VRoid 통짜 export 안에서 파츠는 이미 별도 mesh/primitive 다.
-//   '모든 노드 + bin 통째 유지' → 스프링/콜라이더의 node 인덱스 참조가 그대로 유효(재매핑 불필요).
-//   원하는 mesh 만 노드에 남기고 나머지 mesh 참조를 끊는다.
+// 방식: raw glTF 수술. VRoid 통짜 export 안에서 부위는 이미 별도 mesh/머티리얼(프리미티브)다.
+//   '모든 노드 + bin 통째 유지' → 스프링/콜라이더/IBM의 node·accessor 참조가 그대로 유효.
+//   타깃 mesh만 노드에 남기고(필요시 머티리얼로 프리미티브까지 필터) 나머지 mesh 참조를 끊는다.
+//   ※ 본 prune은 아직 안 함(파일 비대) → 후속 gltf-transform 단계 과제. loadPart 는 미사용 본을
+//     'weighted 일 때만' 누락 보고하므로 기능엔 무해.
 //
 // 실행: node scripts/extractParts.mjs
 
 import fs from 'fs'
 
-const SRC = 'public/avatars/male_sample.vrm'
+const DIR = 'public/avatars'
 const MAGIC = 0x46546c67
 const JSON_CHUNK = 0x4e4f534a
 const BIN_CHUNK = 0x004e4942
+
+// ── 추출 잡 정의 ── (부위 추가 = 여기에 한 줄)
+const JOBS = [
+  { src: 'male1/parts/male_white_shirt.vrm',  mesh: 'Body', keepMaterial: 'Tops_01_CLOTH',    out: 'male1/Tops_white_shirt.glb',    vrm: false },
+  { src: 'male1/parts/male_scotch_pants.vrm', mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'male1/Bottoms_scotch_pants.glb', vrm: false },
+  { src: 'male_sample.vrm',                   mesh: 'Hair',                                     out: 'Hair_sample.vrm', vrm: true, springKeep: 'Hair' },
+]
 
 function parseGLB(path) {
   const buf = fs.readFileSync(path)
@@ -53,66 +62,54 @@ function packGLB(json, bin) {
   return out
 }
 
-// keepMeshIdx 의 mesh 만 노드에 남기고 나머지 mesh 노드 참조 제거. (json 은 fresh copy 로 받음)
-function keepOnlyMesh(g, keepMeshIdx, newMeshName) {
-  g.meshes[keepMeshIdx].name = newMeshName
+function runJob(job) {
+  const { json: g, bin } = parseGLB(`${DIR}/${job.src}`)
+
+  // 타깃 mesh 인덱스
+  const meshIdx = g.meshes.findIndex((m) => new RegExp(job.mesh, 'i').test(m.name))
+  if (meshIdx < 0) throw new Error(`${job.src}: mesh "${job.mesh}" 없음`)
+
+  // 머티리얼 필터(있으면) — 타깃 mesh 안에서 해당 프리미티브만 남김
+  if (job.keepMaterial) {
+    const kept = g.meshes[meshIdx].primitives.filter((p) =>
+      (g.materials?.[p.material]?.name ?? '').includes(job.keepMaterial),
+    )
+    if (!kept.length) throw new Error(`${job.src}: material "${job.keepMaterial}" 없음`)
+    g.meshes[meshIdx].primitives = kept
+  }
+  g.meshes[meshIdx].name = job.out.split('/').pop().replace(/\.\w+$/, '')
+
+  // 나머지 mesh 는 노드 참조 제거(렌더 끊기) — node·accessor 인덱스는 유지
   g.nodes.forEach((n) => {
-    if (n.mesh !== undefined && n.mesh !== keepMeshIdx) delete n.mesh
+    if (n.mesh !== undefined && n.mesh !== meshIdx) delete n.mesh
   })
-}
 
-function freshJson() {
-  return JSON.parse(JSON.stringify(parsed.json))
-}
+  if (job.vrm) {
+    // VRM 유지: 스프링을 지정 체인만 남김(노드 인덱스 보존 → 참조 유효)
+    const sb = g.extensions?.VRMC_springBone
+    if (sb?.springs && job.springKeep) {
+      sb.springs = sb.springs.filter((s) =>
+        s.joints?.some((j) => (g.nodes[j.node]?.name ?? '').includes(job.springKeep)),
+      )
+    }
+  } else {
+    // GLB: VRM 확장 제거(순수 GLTFLoader)
+    delete g.extensionsRequired
+    delete g.extensions
+  }
 
-const parsed = parseGLB(SRC)
-const bin = parsed.bin
+  fs.writeFileSync(`${DIR}/${job.out}`, packGLB(g, bin))
 
-// 어떤 mesh 가 Tops/Hair 인지 식별 (머티리얼/메시명 기준)
-function findMesh(pred) {
-  return parsed.json.meshes.findIndex((m, mi) =>
-    m.primitives.some((p) => pred(parsed.json.materials?.[p.material]?.name ?? '', m.name)),
+  // 자가검수
+  const re = parseGLB(`${DIR}/${job.out}`)
+  const rn = re.json.nodes.filter((n) => n.mesh !== undefined)
+  const mb = (fs.statSync(`${DIR}/${job.out}`).size / 1024 / 1024).toFixed(1)
+  const springs = re.json.extensions?.VRMC_springBone?.springs?.length
+  const prims = re.json.meshes[meshIdx].primitives.length
+  console.log(
+    `✅ ${job.out} (${mb}MB) 렌더노드 ${rn.length}·prim ${prims}` +
+      (job.vrm ? ` · 스프링 ${springs}` : ' · GLB'),
   )
 }
-const topsMesh = findMesh((mat) => mat.includes('Tops'))
-const hairMesh = findMesh((mat, name) => /hair/i.test(name) && mat.includes('Hair'))
 
-// ── ④ Tops_sample.glb ── plain GLTFLoader: VRM 확장 제거
-{
-  const g = freshJson()
-  // Tops 가 든 mesh 에서 Tops 프리미티브만 남김 (그 mesh 엔 body-skin/hairback prim 도 섞여 있음)
-  const m = g.meshes[topsMesh]
-  m.primitives = m.primitives.filter((p) => (g.materials?.[p.material]?.name ?? '').includes('Tops'))
-  keepOnlyMesh(g, topsMesh, 'Tops_sample')
-  delete g.extensionsRequired
-  delete g.extensions
-  fs.writeFileSync('public/avatars/Tops_sample.glb', packGLB(g, bin))
-}
-
-// ── ⑤ Hair_sample.vrm ── VRMLoaderPlugin: 확장 보존, 스프링은 헤어만
-let hairSpringCount = 0
-{
-  const g = freshJson()
-  keepOnlyMesh(g, hairMesh, 'Hair_sample')
-  // 스프링을 헤어 체인만 남김 (joints 가 J_Sec_Hair* 노드를 참조하는 것). 노드는 다 유지 → 인덱스 유효.
-  const sb = g.extensions?.VRMC_springBone
-  if (sb?.springs) {
-    sb.springs = sb.springs.filter((s) =>
-      s.joints?.some((j) => (g.nodes[j.node]?.name ?? '').includes('Hair')),
-    )
-    hairSpringCount = sb.springs.length
-  }
-  // VRMC_vrm / VRMC_springBone / mtoon / extensionsRequired 는 그대로 유지(플러그인이 처리)
-  fs.writeFileSync('public/avatars/Hair_sample.vrm', packGLB(g, bin))
-}
-
-// 자가검수
-function summary(path) {
-  const re = parseGLB(path)
-  const rn = re.json.nodes.filter((n) => n.mesh !== undefined)
-  return { mb: (fs.statSync(path).size / 1024 / 1024).toFixed(1), render: rn.length, skinned: rn.filter((n) => n.skin !== undefined).length, sb: re.json.extensions?.VRMC_springBone?.springs?.length }
-}
-const t = summary('public/avatars/Tops_sample.glb')
-const h = summary('public/avatars/Hair_sample.vrm')
-console.log(`✅ Tops_sample.glb (${t.mb}MB) 렌더노드 ${t.render} 스킨드 ${t.skinned}`)
-console.log(`✅ Hair_sample.vrm (${h.mb}MB) 렌더노드 ${h.render} 스킨드 ${h.skinned} | 헤어 스프링 ${hairSpringCount} (전체 33에서 필터)`)
+for (const job of JOBS) runJob(job)

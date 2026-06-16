@@ -9,8 +9,8 @@ import { MODULE_PARTS, PartStatus } from './constants'
 const MORPHS = ['happy', 'angry', 'sad', 'surprised', 'aa', 'oh'] as const
 
 export function ComposerScene() {
-  const [hair, setHair] = useState(true)
-  const [shirt, setShirt] = useState(true)
+  const [hair, setHair] = useState(false) // 더미 헤어캡 — 실 Hair 파츠 있으니 기본 OFF
+  const [shirt, setShirt] = useState(false) // 더미 셔츠쉘 — 실 Tops 파츠 있으니 기본 OFF
   const [morph, setMorph] = useState(0)
   const [morphName, setMorphName] = useState<string>('happy')
   const [wave, setWave] = useState(false)
