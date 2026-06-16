@@ -16,6 +16,7 @@ npm run dev    # http://localhost:5173
 ## 문서
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 왜 별도 프로젝트인가 + 3층 구조 + 검증 상태
 - [ASSET_SPEC.md](ASSET_SPEC.md) — 외주 핸드오프 사양 (베이스 규약 실측값)
+- [DECISIONS.md](DECISIONS.md) — 의사결정 로그 (ADR): 분기·에셋전략·베이스 결정 근거
 
 ## 구조
 ```
