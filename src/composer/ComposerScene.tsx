@@ -1,9 +1,11 @@
-import { Suspense, useState } from 'react'
+import { Suspense, useCallback, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { AvatarComposer } from './AvatarComposer'
+import { PartsPanel } from './PartsPanel'
+import { MODULE_PARTS, PartStatus } from './constants'
 
-// 에셋 조립 씬 — 좌측 3D, 우측 컨트롤. 현재는 더미 파츠로 조립 메커니즘을 검증하는 단계.
+// 에셋 조립 씬 — 좌측 3D(+모듈 파츠 디버그 패널), 우측 컨트롤.
 const MORPHS = ['happy', 'angry', 'sad', 'surprised', 'aa', 'oh'] as const
 
 export function ComposerScene() {
@@ -14,6 +16,22 @@ export function ComposerScene() {
   const [wave, setWave] = useState(false)
   const [report, setReport] = useState<string[]>([])
 
+  // 모듈 파츠 가시성 + 로드 상태 (레지스트리 기반 초기화)
+  const [partsVisible, setPartsVisible] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(MODULE_PARTS.map((p) => [p.id, true])),
+  )
+  const [partStatus, setPartStatus] = useState<Record<string, PartStatus>>(
+    () => Object.fromEntries(MODULE_PARTS.map((p) => [p.id, 'idle'])),
+  )
+  const onPartStatus = useCallback(
+    (id: string, status: PartStatus) => setPartStatus((s) => ({ ...s, [id]: status })),
+    [],
+  )
+  const togglePart = useCallback(
+    (id: string) => setPartsVisible((v) => ({ ...v, [id]: !v[id] })),
+    [],
+  )
+
   return (
     <div className="flex w-full h-full bg-gray-950">
       <div className="flex-1 relative">
@@ -23,11 +41,12 @@ export function ComposerScene() {
           <Suspense fallback={null}>
             <AvatarComposer
               hair={hair} shirt={shirt} morph={morph} morphName={morphName} wave={wave}
-              onReport={setReport}
+              partsVisible={partsVisible} onReport={setReport} onPartStatus={onPartStatus}
             />
           </Suspense>
           <OrbitControls makeDefault target={[0, 1.2, 0]} minDistance={0.4} maxDistance={5} />
         </Canvas>
+        <PartsPanel visible={partsVisible} status={partStatus} onToggle={togglePart} />
       </div>
 
       <div className="w-72 shrink-0 border-l border-gray-800 bg-gray-900 text-gray-100 p-4 flex flex-col gap-4 overflow-y-auto">

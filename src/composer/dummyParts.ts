@@ -83,6 +83,6 @@ export function attachHair(vrm: VRM, hair: THREE.Object3D): boolean {
   return true
 }
 
-// TODO(다음 마일스톤): 실제 authored GLB 파츠 로더
-//   export async function loadPart(url): bind(baseSkeleton) — 미검증.
-//   + 스프링본 동적 병합 / 옷밑 살 클리핑(Hide_Body 그룹)도 이 단계에서.
+// 실제 authored GLB 파츠 로더는 ./partLoader.ts 의 loadPart() 로 분리(스캐폴딩 완료).
+//   - ④ 외부 GLB → base 스켈레톤 rebind: 구현 완료, PART_TEST_URL 로 검증 대기.
+//   - ⑤ 스프링본 병합 / ⑥ Hide_Body 클리핑: 에셋 메타데이터 합의 후(partLoader.ts 하단 참조).

@@ -6,3 +6,7 @@ dist/
 .DS_Store
 .vercel
 *.tsbuildinfo
+
+# 검증용 파생 스탠드인 — scripts/extractParts.mjs 로 male_sample.vrm 에서 재생성
+public/avatars/Tops_sample.glb
+public/avatars/Hair_sample.vrm
