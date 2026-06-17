@@ -45,6 +45,24 @@ const JOBS = [
   //   변형이 옮긴 눈 본(J_Adj_*FaceEye)만 네임스페이스 → 로더가 base 눈 본(46.7mm 어긋남) 대신 '자기 눈
   //   본'을 graft. 표정은 base 익스프레션 인덱스(양 파일 동일) 재사용 → base Face influences 를 새 Face 로 미러.
   { src: 'male_eye_sample.vrm',               mesh: 'Face',                                     out: 'male1/Face_eyesample.vrm', vrm: true, nsBones: 'FaceEye' },
+
+  // ── female1 (베이스: female1/female_base.vrm) ──
+  // 상의(Body 메시 Tops_01_CLOTH). top_3 은 타이(Accessory_Tie)·top_4 는 Onepiece/Shoes 가 섞여
+  //   Tops_01_CLOTH 만 남긴다 → 이 둘은 부분 추출이라 **시각 검토** 후 분류 확정(다음 창).
+  { src: 'female1/parts/female_top_1.vrm', mesh: 'Body', keepMaterial: 'Tops_01_CLOTH', out: 'female1/Tops_1.glb', vrm: false },
+  { src: 'female1/parts/female_top_2.vrm', mesh: 'Body', keepMaterial: 'Tops_01_CLOTH', out: 'female1/Tops_2.glb', vrm: false },
+  { src: 'female1/parts/female_top_3.vrm', mesh: 'Body', keepMaterial: 'Tops_01_CLOTH', out: 'female1/Tops_3.glb', vrm: false },
+  { src: 'female1/parts/female_top_4.vrm', mesh: 'Body', keepMaterial: 'Tops_01_CLOTH', out: 'female1/Tops_4.glb', vrm: false },
+  // 하의(Bottoms_01_CLOTH)
+  { src: 'female1/parts/female_bottom_1.vrm', mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'female1/Bottoms_1.glb', vrm: false },
+  { src: 'female1/parts/female_bottom_2.vrm', mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'female1/Bottoms_2.glb', vrm: false },
+  { src: 'female1/parts/female_bottom_3.vrm', mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'female1/Bottoms_3.glb', vrm: false },
+  // 얼굴(B트랙, male1 동형 — Face 메시·57모프·눈 본 네임스페이스). face_1 = 베이스 얼굴이라 제외.
+  { src: 'female1/parts/female_face_2.vrm', mesh: 'Face', out: 'female1/Face_2.vrm', vrm: true, nsBones: 'FaceEye' },
+  { src: 'female1/parts/female_face_3.vrm', mesh: 'Face', out: 'female1/Face_3.vrm', vrm: true, nsBones: 'FaceEye' },
+  { src: 'female1/parts/female_face_4.vrm', mesh: 'Face', out: 'female1/Face_4.vrm', vrm: true, nsBones: 'FaceEye' },
+  // 헤어(hair_1~4) 보류: 앞머리(Hair001 메시)+뒷머리(HairBack, Body 병합)가 2메시 분산 →
+  //   단일-메시 추출기 확장 필요(다음 창).
 ]
 
 function parseGLB(path) {
