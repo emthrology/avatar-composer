@@ -44,6 +44,28 @@ function indexBaseBones(baseVrm: VRM): Map<string, THREE.Bone> {
   return map
 }
 
+// 파츠가 데려온 '보조 본'을 base 의 대응 부모 본 아래로 graft 한다.
+//   VRoid 옷은 소매/옷자락 흔들림용 secondary 본(J_Sec_*TopsUpperArm*, J_Sec_*CoatSkirt* 등)을
+//   쓰는데, 이 본들은 맨몸 base 에 없다 → 이름 매칭 rebind 가 실패해 그 정점이 파츠 bind pose
+//   (A-pose)에 고정된다(소매가 옆으로 뻗는 현상). 부모가 base 에 있는 본(예: UpperArm)인 보조
+//   본을 그 부모 아래로 reparent(local transform 보존)하면 base 본을 리지드로 추종 → rebind 매칭.
+//   스프링 매니저는 안 붙으므로 흔들림 없이 정적으로 따라간다(정적 의류엔 충분).
+function graftAuxBones(partScene: THREE.Object3D, baseVrm: VRM): THREE.Object3D[] {
+  const baseBones = indexBaseBones(baseVrm)
+  const roots: THREE.Bone[] = []
+  partScene.traverse((o) => {
+    const b = o as THREE.Bone
+    // base 에 없고(=보조 본) 부모가 base 에 있는 본 = graft 서브트리 루트(_end 등 자식은 함께 이동)
+    if (b.isBone && !baseBones.has(b.name) && b.parent && baseBones.has(b.parent.name)) roots.push(b)
+  })
+  const grafted: THREE.Object3D[] = []
+  for (const b of roots) {
+    baseBones.get(b.parent!.name)!.add(b) // reparent(서브트리 통째, local transform 보존)
+    grafted.push(b)
+  }
+  return grafted
+}
+
 // 외부 SkinnedMesh 를 base 스켈레톤으로 rebind.
 // 핵심: 지오메트리의 skinIndex 는 '원본 skeleton.bones 배열의 인덱스'를 가리키므로,
 // 같은 순서로 base 본을 치환한 새 본 배열을 만들어야 한다. boneInverses 는 바인드 포즈가
@@ -75,7 +97,6 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
   const loader = new GLTFLoader()
   const gltf = await loader.loadAsync(url)
 
-  const baseBoneByName = indexBaseBones(baseVrm)
   const missingBones: string[] = []
   const skinned: THREE.SkinnedMesh[] = []
 
@@ -83,6 +104,10 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
     const sm = o as THREE.SkinnedMesh
     if (sm.isSkinnedMesh) skinned.push(sm)
   })
+
+  // 옷이 데려온 보조 본(소매/옷자락 J_Sec_*)을 base 부모 아래로 graft → rebind 매칭(graft 후 인덱싱)
+  const graftedBones = graftAuxBones(gltf.scene, baseVrm)
+  const baseBoneByName = indexBaseBones(baseVrm)
 
   const rigid: THREE.Object3D[] = []
 
@@ -120,6 +145,7 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
         }
       })
     }
+    for (const b of graftedBones) b.removeFromParent() // graft 한 보조 본 정리
   }
 
   const setVisible = (v: boolean) => {
