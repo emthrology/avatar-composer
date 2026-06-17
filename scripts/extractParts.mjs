@@ -33,7 +33,12 @@ const BIN_CHUNK = 0x004e4942
 const JOBS = [
   { src: 'male1/parts/male_white_shirt.vrm',  mesh: 'Body', keepMaterial: 'Tops_01_CLOTH',    out: 'male1/Tops_white_shirt.glb',    vrm: false },
   { src: 'male1/parts/male_scotch_pants.vrm', mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'male1/Bottoms_scotch_pants.glb', vrm: false },
-  { src: 'male_sample.vrm',                   mesh: 'Hair',                                     out: 'Hair_sample.vrm', vrm: true, springKeep: 'Hair' },
+  { src: 'male_sample.vrm',                   mesh: 'Hair',                                     out: 'Hair_sample.vrm', vrm: true, springKeep: 'Hair', nsBones: '^J_Sec_.*Hair' },
+  // 얼굴(B트랙): Face 메시 통째(8 머티리얼·57 모프). **VRM 으로** 추출 — base 가 MToon(툰 셰이딩)이라
+  //   GLB(PBR)로 빼면 톤이 어긋남 → VRMC_materials_mtoon 보존 위해 VRM 유지(VRMLoaderPlugin 로드).
+  //   변형이 옮긴 눈 본(J_Adj_*FaceEye)만 네임스페이스 → 로더가 base 눈 본(46.7mm 어긋남) 대신 '자기 눈
+  //   본'을 graft. 표정은 base 익스프레션 인덱스(양 파일 동일) 재사용 → base Face influences 를 새 Face 로 미러.
+  { src: 'male_eye_sample.vrm',               mesh: 'Face',                                     out: 'male1/Face_eyesample.vrm', vrm: true, nsBones: 'FaceEye' },
 ]
 
 function parseGLB(path) {
@@ -83,6 +88,121 @@ async function pruneGlb(path) {
   await io.write(path, doc)
 }
 
+// material/textureInfo 안의 모든 texture index(.index)를 texMap 으로 재매핑(중첩/확장 포함 재귀).
+function remapTexInObject(obj, texMap) {
+  if (Array.isArray(obj)) { obj.forEach((v) => remapTexInObject(v, texMap)); return }
+  if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'index' && typeof v === 'number' && texMap.has(v)) obj.index = texMap.get(v)
+      else remapTexInObject(v, texMap)
+    }
+  }
+}
+
+// VRM 안전 prune (raw 수술): 렌더되는 mesh 가 안 쓰는 머티리얼·텍스처·이미지 제거 + bin 재패킹.
+//   ★ accessor/모프타깃/skin/노드/VRMC(springBone·humanoid·expressions·firstPerson)는 일절 안 건드린다 —
+//     이들은 node/mesh/accessor 인덱스 참조라 그대로 유효. 이동하는 건 material/texture/image/bufferView
+//     인덱스뿐이고, 그 참조처(primitive.material, material 텍스처, texture.source, meta.thumbnail,
+//     expression material binds)만 갱신한다. → 모프·표정·스프링 보존, 확장성 유지.
+//   회수 대상: 미사용 머티리얼/텍스처/이미지의 bufferView 데이터(주로 다른 부위 텍스처).
+function pruneVrm(path) {
+  const { json: g, bin } = parseGLB(path)
+  if (!g.materials || !g.bufferViews) return
+
+  // 1) 렌더되는(노드가 참조하는) mesh 가 쓰는 머티리얼만 보존
+  const rendered = new Set(g.nodes.filter((n) => n.mesh !== undefined).map((n) => n.mesh))
+  const keptMat = new Set()
+  g.meshes.forEach((m, mi) => {
+    if (rendered.has(mi)) m.primitives.forEach((p) => { if (p.material != null) keptMat.add(p.material) })
+  })
+  // 2) 보존 머티리얼이 참조하는 텍스처(모든 .index 수집 — over-keep 은 안전)
+  const keptTex = new Set()
+  for (const mi of keptMat) {
+    JSON.stringify(g.materials[mi]).replace(/"index":\s*(\d+)/g, (_, n) => { keptTex.add(+n); return _ })
+  }
+  // expression material binds 가 참조하는 머티리얼도 보존(있으면)
+  const exprMatBinds = []
+  const pre = g.extensions?.VRMC_vrm?.expressions
+  for (const grp of [pre?.preset, pre?.custom]) {
+    for (const v of Object.values(grp || {})) {
+      for (const b of [...(v.materialColorBinds || []), ...(v.textureTransformBinds || [])]) {
+        keptMat.add(b.material); exprMatBinds.push(b)
+      }
+    }
+  }
+  for (const mi of keptMat) JSON.stringify(g.materials[mi]).replace(/"index":\s*(\d+)/g, (_, n) => { keptTex.add(+n); return _ })
+  // 3) 보존 이미지(보존 텍스처의 source + VRM 썸네일)
+  const keptImg = new Set()
+  for (const ti of keptTex) { const t = g.textures?.[ti]; if (t && t.source != null) keptImg.add(t.source) }
+  const thumb = g.extensions?.VRMC_vrm?.meta?.thumbnailImage
+  if (thumb != null) keptImg.add(thumb)
+  // 4) 보존 bufferView = 모든 accessor 의 BV(geometry/morph/skin 전부 유지) ∪ 보존 이미지 BV
+  const keptBV = new Set()
+  g.accessors.forEach((a) => {
+    if (a.bufferView != null) keptBV.add(a.bufferView)
+    if (a.sparse) { keptBV.add(a.sparse.indices.bufferView); keptBV.add(a.sparse.values.bufferView) }
+  })
+  for (const ii of keptImg) { const im = g.images?.[ii]; if (im && im.bufferView != null) keptBV.add(im.bufferView) }
+
+  // bufferView 재패킹 → 새 bin + old→new 인덱스 맵
+  const bvList = [...keptBV].sort((a, b) => a - b)
+  const bvMap = new Map()
+  const newBVs = []
+  const parts = []
+  let off = 0
+  for (const oldIdx of bvList) {
+    const bv = g.bufferViews[oldIdx]
+    const pad = (4 - (off % 4)) % 4
+    if (pad) { parts.push(Buffer.alloc(pad)); off += pad }
+    const data = bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength)
+    const nbv = { buffer: 0, byteOffset: off, byteLength: bv.byteLength }
+    if (bv.byteStride != null) nbv.byteStride = bv.byteStride
+    if (bv.target != null) nbv.target = bv.target
+    bvMap.set(oldIdx, newBVs.length)
+    newBVs.push(nbv)
+    parts.push(Buffer.from(data))
+    off += bv.byteLength
+  }
+  const newBin = Buffer.concat(parts)
+
+  // accessor.bufferView 재매핑(인덱스만; accessor 자체/byteOffset 불변)
+  g.accessors.forEach((a) => {
+    if (a.bufferView != null) a.bufferView = bvMap.get(a.bufferView)
+    if (a.sparse) {
+      a.sparse.indices.bufferView = bvMap.get(a.sparse.indices.bufferView)
+      a.sparse.values.bufferView = bvMap.get(a.sparse.values.bufferView)
+    }
+  })
+  // images 재색인(+BV 재매핑)
+  const imgMap = new Map(); const newImages = []
+  g.images.forEach((im, i) => {
+    if (keptImg.has(i)) { if (im.bufferView != null) im.bufferView = bvMap.get(im.bufferView); imgMap.set(i, newImages.length); newImages.push(im) }
+  })
+  // textures 재색인(+source 재매핑)
+  const texMap = new Map(); const newTextures = []
+  g.textures.forEach((t, i) => {
+    if (keptTex.has(i)) { if (t.source != null) t.source = imgMap.get(t.source); texMap.set(i, newTextures.length); newTextures.push(t) }
+  })
+  // materials 재색인(+텍스처 .index 재매핑)
+  const matMap = new Map(); const newMaterials = []
+  g.materials.forEach((m, i) => {
+    if (keptMat.has(i)) { remapTexInObject(m, texMap); matMap.set(i, newMaterials.length); newMaterials.push(m) }
+  })
+  // 참조처 갱신: primitive.material(전 mesh — 죽은 mesh 의 dangling 머티리얼은 제거)
+  g.meshes.forEach((m) => m.primitives.forEach((p) => {
+    if (p.material != null) { const nm = matMap.get(p.material); if (nm != null) p.material = nm; else delete p.material }
+  }))
+  if (thumb != null && g.extensions?.VRMC_vrm?.meta) g.extensions.VRMC_vrm.meta.thumbnailImage = imgMap.get(thumb)
+  for (const b of exprMatBinds) b.material = matMap.get(b.material)
+
+  g.bufferViews = newBVs
+  g.images = newImages
+  g.textures = newTextures
+  g.materials = newMaterials
+  g.buffers = [{ byteLength: newBin.length }]
+  fs.writeFileSync(path, packGLB(g, newBin))
+}
+
 function runJob(job) {
   const { json: g, bin } = parseGLB(`${DIR}/${job.src}`)
 
@@ -105,7 +225,6 @@ function runJob(job) {
     if (n.mesh !== undefined && n.mesh !== meshIdx) delete n.mesh
   })
 
-  let renamed = 0
   if (job.vrm) {
     // VRM 유지: 스프링을 지정 체인만 남김(노드 인덱스 보존 → 참조 유효)
     const sb = g.extensions?.VRMC_springBone
@@ -114,18 +233,24 @@ function runJob(job) {
         s.joints?.some((j) => (g.nodes[j.node]?.name ?? '').includes(job.springKeep)),
       )
     }
-    // 스프링 본 네임스페이싱: 헤어 스프링 노드(J_Sec_*Hair*)에 파츠 prefix → 다중 파츠 충돌 방지
-    const prefix = job.ns ?? job.out.split('/').pop().replace(/\.\w+$/, '')
-    g.nodes.forEach((n) => {
-      if (n.name && /^J_Sec_/.test(n.name) && /Hair/i.test(n.name)) {
-        n.name = `${prefix}__${n.name}`
-        renamed++
-      }
-    })
   } else {
     // GLB: VRM 확장 제거(순수 GLTFLoader)
     delete g.extensionsRequired
     delete g.extensions
+  }
+
+  // 본 네임스페이싱(공통): nsBones 정규식에 걸리는 본 node name 에 파츠 prefix 부여.
+  //   목적 1 — 스프링 충돌 방지: 헤어마다 J_Sec_*Hair* 이름 재사용 → 다중 파츠 동시 로드 시 충돌.
+  //   목적 2 — 본 graft 강제: 얼굴 변형이 옮긴 본(J_Adj_*FaceEye)은 base 와 같은 이름이면 rebind 가
+  //     base 본(엉뚱한 위치)에 매칭됨 → prefix 로 base 와 이름을 어긋내 로더가 '자기 본'을 graft 하게 함.
+  //   node 참조는 인덱스라 name 변경에 안전. 런타임 매칭은 부분문자열(/Hair/i, /FaceEye/)·고유성 유지.
+  let renamed = 0
+  if (job.nsBones) {
+    const prefix = job.ns ?? job.out.split('/').pop().replace(/\.\w+$/, '')
+    const re = new RegExp(job.nsBones)
+    g.nodes.forEach((n) => {
+      if (n.name && re.test(n.name)) { n.name = `${prefix}__${n.name}`; renamed++ }
+    })
   }
 
   fs.writeFileSync(`${DIR}/${job.out}`, packGLB(g, bin))
@@ -133,20 +258,33 @@ function runJob(job) {
 }
 
 for (const job of JOBS) {
-  const { meshIdx, renamed } = runJob(job)
-  if (!job.vrm) await pruneGlb(`${DIR}/${job.out}`) // GLB만 prune
+  const { renamed } = runJob(job)
+  const before = fs.statSync(`${DIR}/${job.out}`).size
+  if (!job.vrm) await pruneGlb(`${DIR}/${job.out}`) // GLB: gltf-transform prune
+  else pruneVrm(`${DIR}/${job.out}`)                // VRM: 안전 텍스처 prune(모프·VRMC 보존)
 
-  // 자가검수
+  // 자가검수 — 재파싱해 무결성 확인(모프·프리미티브·텍스처 참조 유효 + 용량 회수)
   const re = parseGLB(`${DIR}/${job.out}`)
   const rn = re.json.nodes.filter((n) => n.mesh !== undefined)
   const mb = (fs.statSync(`${DIR}/${job.out}`).size / 1024 / 1024).toFixed(1)
+  const saved = ((before - fs.statSync(`${DIR}/${job.out}`).size) / 1024 / 1024).toFixed(1)
   const springs = re.json.extensions?.VRMC_springBone?.springs?.length
-  // 렌더되는 mesh(노드가 참조하는 것)의 prim 만 집계 — prune 으로 mesh 인덱스가 바뀌어도, VRM 의
-  // 죽은 mesh(참조 끊김)가 남아 있어도 정확.
   const renderedMeshes = new Set(rn.map((n) => n.mesh))
   const prims = [...renderedMeshes].reduce((s, mi) => s + re.json.meshes[mi].primitives.length, 0)
+  // 무결성 가드: 보존 머티리얼의 텍스처/이미지 참조가 범위 내인지
+  let dangling = 0
+  re.json.materials?.forEach((m) => JSON.stringify(m).replace(/"index":\s*(\d+)/g, (_, n) => {
+    if (+n >= (re.json.textures?.length ?? 0)) dangling++; return _
+  }))
+  re.json.textures?.forEach((t) => { if (t.source != null && t.source >= (re.json.images?.length ?? 0)) dangling++ })
+  const morphs = job.vrm ? re.json.meshes[[...renderedMeshes][0]]?.primitives[0]?.targets?.length : null
   console.log(
-    `✅ ${job.out} (${mb}MB) 렌더노드 ${rn.length}·prim ${prims}` +
-      (job.vrm ? ` · 스프링 ${springs} · 네임스페이스 ${renamed}본` : ' · GLB·pruned'),
+    `✅ ${job.out} (${mb}MB, -${saved}MB) 렌더노드 ${rn.length}·prim ${prims}` +
+      (job.vrm
+        ? (morphs != null ? ` · 모프 ${morphs}` : '') +
+          (springs != null ? ` · 스프링 ${springs}` : '') +
+          (renamed ? ` · 네임스페이스 ${renamed}본` : '')
+        : ' · GLB·pruned') +
+      (dangling ? ` · ⚠️ dangling ${dangling}` : ''),
   )
 }

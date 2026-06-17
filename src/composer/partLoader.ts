@@ -228,6 +228,159 @@ export async function loadSpringPart(url: string, baseVrm: VRM): Promise<LoadedS
   return { mesh, graftedBones, mergedJoints, missingBones, setVisible, dispose }
 }
 
+// ─── ⑦ 얼굴 교체 (B트랙: 모양 변형) ──────────────────────────────────────────
+// 얼굴 변형은 옷/헤어와 다르다: VRoid 에서 얼굴 '모양'은 머리 메시 지오메트리에 baked 돼
+// 텍스처로 못 바꾼다 → 다른 Face 메시로 교체해야 한다. 실측 결과(male_eye_sample vs base):
+//   · Face 메시는 단 3본에 가중 — Head(0.00mm 동일) + 좌/우 눈 본(J_Adj_*FaceEye, 46.7mm 이동)
+//   · 즉 형태는 Head 에 리지드라 그대로 정렬되고, '눈 본만' 변형이 데려와야 함(헤어 graft 와 동형)
+//   · 표정 모프 57·익스프레션 14 의 바인드 인덱스가 base 와 동일 → 표정 리그 재연결은
+//     three-vrm 내부를 안 건드리고 'base Face influences → 새 Face 미러'로 해결
+// 흐름: 눈 본 graft(네임스페이스로 base 와 이름 어긋나 자기 본 사용) → 8 Face 메시 rebind →
+//   base 원본 Face 숨김 → 매 프레임 morphTargetInfluences 미러.
+// 알려진 단순화(PoC): 눈 lookAt 본 재연결은 생략(시선 추적 X), 표정 모프만 증명.
+
+const FACE_MAT_RE = /Face|Eye/i // 얼굴 8 머티리얼(FaceMouth/EyeIris/…)은 모두 Face|Eye 포함, Body 제외
+
+function faceMeshesOf(root: THREE.Object3D): THREE.SkinnedMesh[] {
+  const out: THREE.SkinnedMesh[] = []
+  root.traverse((o) => {
+    const sm = o as THREE.SkinnedMesh
+    if (!sm.isSkinnedMesh) return
+    const mat = Array.isArray(sm.material) ? sm.material[0] : sm.material
+    if (mat && FACE_MAT_RE.test(mat.name)) out.push(sm)
+  })
+  return out
+}
+const matNameOf = (m: THREE.SkinnedMesh): string =>
+  (Array.isArray(m.material) ? m.material[0] : m.material)?.name ?? ''
+
+export interface LoadedFacePart {
+  meshes: THREE.SkinnedMesh[] // 새 얼굴 8 프리미티브
+  baseFaceMeshes: THREE.SkinnedMesh[] // base 원본 얼굴(미러 소스 + 토글 복원)
+  graftedBones: THREE.Object3D[] // base Head 아래로 이식된 눈 본
+  missingBones: string[]
+  sync: () => void // 매 프레임: base Face 표정 influences + 눈 lookAt 회전 → 새 Face/눈 본 미러
+  setEyeColor: (hex: string | null) => void // 텍스처/머티리얼 축: 눈(EyeIris) 색 — 형태와 독립
+  setVisible: (v: boolean) => void
+  dispose: () => void
+}
+
+export async function loadFacePart(url: string, baseVrm: VRM): Promise<LoadedFacePart> {
+  // base 가 MToon(툰 셰이딩)이라 얼굴도 VRMLoaderPlugin 으로 로드해 MToon 머티리얼을 보존한다.
+  // plain GLTFLoader(PBR)로 빼면 툰 램프·아웃라인이 사라져 base 와 톤이 어긋난다.
+  const loader = new GLTFLoader()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  loader.register((parser: any) => new VRMLoaderPlugin(parser))
+  const gltf = await loader.loadAsync(url)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const partVrm: VRM = (gltf as any).userData?.vrm
+  if (!partVrm) throw new Error('얼굴 파츠가 VRM 이 아님 (MToon 보존 위해 VRM 필요)')
+
+  // base 원본 얼굴 메시(미러 소스 + 토글 시 복원 대상)
+  const baseFaceMeshes = faceMeshesOf(baseVrm.scene)
+  // 새 얼굴 메시(8 프리미티브) — MToon 머티리얼
+  const newFaceMeshes = faceMeshesOf(partVrm.scene)
+
+  const baseHead = baseVrm.humanoid.getRawBoneNode(VRMHumanBoneName.Head)
+
+  // 1) 변형이 데려온 본(base 에 같은 이름이 없는 = 네임스페이스된 눈 본)을 base Head 아래로 graft.
+  //    눈 본은 Head 직속 리프라 local transform 보존 reparent 로 변형 위치에 정확히 안착.
+  const baseBoneNames = indexBaseBones(baseVrm)
+  const graftedBones: THREE.Object3D[] = []
+  const grafting = new Map<string, THREE.Object3D>()
+  for (const sm of newFaceMeshes) {
+    for (const b of sm.skeleton.bones) {
+      if (!baseBoneNames.has(b.name) && !grafting.has(b.name)) grafting.set(b.name, b)
+    }
+  }
+  if (baseHead) {
+    for (const b of grafting.values()) {
+      baseHead.add(b) // reparent
+      graftedBones.push(b)
+    }
+  }
+
+  // 2) 8 Face 메시를 base 스켈레톤으로 rebind(graft 후 인덱싱 → 눈 본 포함 매칭)
+  const baseBoneByName = indexBaseBones(baseVrm)
+  const missingBones: string[] = []
+  const meshes: THREE.SkinnedMesh[] = []
+  for (const sm of newFaceMeshes) {
+    rebindToBase(sm, baseBoneByName, missingBones)
+    sm.removeFromParent()
+    baseVrm.scene.add(sm)
+    meshes.push(sm)
+  }
+
+  // 3) 미러 페어링: base 얼굴 ↔ 새 얼굴을 머티리얼 이름으로 1:1 매칭(양쪽 동일 8 머티리얼)
+  const pairs: { base: THREE.SkinnedMesh; neo: THREE.SkinnedMesh }[] = []
+  for (const neo of meshes) {
+    const base = baseFaceMeshes.find((bm) => matNameOf(bm) === matNameOf(neo))
+    if (base && base.morphTargetInfluences && neo.morphTargetInfluences) pairs.push({ base, neo })
+  }
+  // 눈 lookAt 미러: base lookAt(bone 타입)이 base 눈 본을 돌리지만, 보이는 눈은 graft 된 변형 눈 본이다.
+  //   base 눈 본의 local 회전을 graft 눈 본에 복사 → 새 얼굴 눈도 같은 타깃을 추종(같은 Head 부모라 정합).
+  const baseLeftEye = baseVrm.humanoid.getRawBoneNode(VRMHumanBoneName.LeftEye)
+  const baseRightEye = baseVrm.humanoid.getRawBoneNode(VRMHumanBoneName.RightEye)
+  const graftLeftEye = graftedBones.find((b) => /_L_FaceEye/.test(b.name)) ?? null
+  const graftRightEye = graftedBones.find((b) => /_R_FaceEye/.test(b.name)) ?? null
+  const eyePairs = ([[baseLeftEye, graftLeftEye], [baseRightEye, graftRightEye]] as const).filter(
+    ([b, g]) => b && g,
+  ) as [THREE.Object3D, THREE.Object3D][]
+
+  const sync = () => {
+    // 표정 모프
+    for (const { base, neo } of pairs) {
+      const a = base.morphTargetInfluences!
+      const b = neo.morphTargetInfluences!
+      const n = Math.min(a.length, b.length)
+      for (let i = 0; i < n; i++) b[i] = a[i]
+    }
+    // 눈 회전(lookAt)
+    for (const [b, g] of eyePairs) g.quaternion.copy(b.quaternion)
+  }
+
+  // 5) 텍스처/머티리얼 축(눈색): EyeIris 머티리얼 색 노브. 얼굴 '모양'(메시 교체)과 독립된 별도 축임을
+  //    증명. 실제 변형 카탈로그는 baseColorTexture 교체(저작 PNG 세트)지만, 색 곱도 같은 머티리얼 노브다.
+  //    base·새 얼굴 양쪽 EyeIris 에 적용(토글 상태 무관).
+  const eyeIrisMats: THREE.Material[] = []
+  for (const m of [...baseFaceMeshes, ...meshes]) {
+    const mats = Array.isArray(m.material) ? m.material : [m.material]
+    for (const mat of mats) if (mat && /EyeIris/i.test(mat.name)) eyeIrisMats.push(mat)
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const colorOf = (mat: any): THREE.Color | null =>
+    mat?.color?.isColor ? mat.color : mat?.uniforms?.litFactor?.value?.isColor ? mat.uniforms.litFactor.value : null
+  const eyeIrisOrig = new Map<THREE.Material, THREE.Color>()
+  for (const mat of eyeIrisMats) { const c = colorOf(mat); if (c) eyeIrisOrig.set(mat, c.clone()) }
+  const setEyeColor = (hex: string | null) => {
+    for (const mat of eyeIrisMats) {
+      const c = colorOf(mat)
+      if (!c) continue
+      if (hex) c.set(hex)
+      else { const o = eyeIrisOrig.get(mat); if (o) c.copy(o) }
+    }
+  }
+
+  // 6) 가시성: 새 얼굴 ON → base 얼굴 숨김(겹침 방지) / OFF → base 얼굴 복원
+  const setVisible = (v: boolean) => {
+    meshes.forEach((m) => { m.visible = v })
+    baseFaceMeshes.forEach((m) => { m.visible = !v })
+  }
+
+  const dispose = () => {
+    for (const m of meshes) {
+      m.removeFromParent()
+      m.geometry.dispose()
+      const mats = Array.isArray(m.material) ? m.material : [m.material]
+      mats.forEach((mat) => mat.dispose())
+    }
+    for (const b of graftedBones) b.removeFromParent()
+    baseFaceMeshes.forEach((m) => { m.visible = true }) // base 얼굴 복원
+  }
+
+  return { meshes, baseFaceMeshes, graftedBones, missingBones, sync, setEyeColor, setVisible, dispose }
+}
+
 // ─── ⑥ 옷밑 살 클리핑 (Hide_Body) — 마킹 채널 합의 후 ─────────────────────────
 // glTF 엔 '버텍스 그룹' 개념이 없다 → 외주 마킹을 어떤 채널로 받을지 미확정
 //   (별도 morph / 별도 머티리얼 분리 / 숨김 인덱스 attribute 중 택1). 합의 후 구현.

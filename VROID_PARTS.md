@@ -54,9 +54,43 @@ VRoid 의상 템플릿엔 `J_Sec_*_CoatSkirt*` 같은 스프링 본이 딸려오
   다중 스프링 파츠 동시 로드 시 이름 충돌 제거. node 참조는 인덱스라 무손상, 런타임 `/Hair/i` 매칭·고유성 유지.
   humanoid(`J_Bip_*`)·Bust·CoatSkirt 불간섭.
 
+- ✅ **VRM 안전 prune** — gltf-transform이 `VRMC_*`를 떨구므로 raw 수술로 직접: 렌더 mesh가 안 쓰는
+  머티리얼·텍스처·이미지의 bufferView만 회수 + bin 재패킹. **accessor/모프/skin/노드/VRMC는 일절 불변**
+  (material/texture/image 인덱스만 이동·갱신). 헤어 11.3→9.9MB, 얼굴 11.8→**7.6MB**, 무결성·모프 57 검증.
+  → 모프 prune은 **의도적으로 안 함**(57 중 14만 쓰지만 확장성 위해 보존).
+
 **남은 과제**
-- **VRM 인지 prune** — 헤어 VRM은 `VRMC_springBone`을 gltf-transform이 모르고 떨궈서 prune 제외(현 11MB).
-  VRM 확장 등록 후 동일 압축 적용 필요.
 - **vertex 압축** — 머티리얼 분리 후에도 POSITION이 메시 공유 버퍼라 미사용 verts 잔존. 인덱스 기준 재패킹 시 추가 ↓.
 - **manifest 화** — `MODULE_PARTS` 하드코딩 → 추출 산출 `manifest.json`(id/카테고리/형식/썸네일) 구동 셀렉터.
 - **batch** — 소스 디렉터리 일괄 → 라이브러리 + manifest 생성, 멱등 재실행.
+
+## 6. 얼굴 트랙 (B): 형태 변형은 메시 교체 [PoC]
+
+얼굴은 옷·헤어와 **범주가 다르다**. VRoid에서 얼굴 *모양*(눈크기·비율)은 머리 메시 지오메트리에 baked →
+텍스처로 못 바꾼다 → **다른 Face 메시로 교체**해야 한다. (눈색·화장 같은 *표면* 변형만 텍스처 스왑 — 별도 축.)
+
+**실측 (`male_eye_sample.vrm` vs base):**
+- Face 메시는 통짜 8 머티리얼(FaceMouth/EyeIris/…)·**모프타깃 57**·익스프레션 14. 4123→**4175 verts**(실제 형태 차).
+- 가중 본은 **단 3개**: Head(**0.00mm 동일**) + 좌/우 눈 본(`J_Adj_*FaceEye`, **46.7mm 이동**).
+  → 형태는 Head에 리지드라 그대로 정렬, **눈 본만** 변형이 데려오면 됨(헤어 graft와 동형).
+- 표정 바인드 인덱스가 base와 **완전 동일**(happy=3, aa=39…) → 표정 리그 재연결이 기계적.
+
+**메커니즘 (`loadFacePart`):**
+1. 추출 시 눈 본(`/FaceEye/`)만 네임스페이스 → base와 이름 어긋나 로더가 base 눈 본(어긋남) 대신 *자기 눈 본*을 graft.
+2. 눈 본을 base Head 아래로 graft(Head 직속 리프라 local 보존) → 8 Face 메시를 base로 rebind → 0 누락.
+3. base 원본 Face 숨김(겹침 방지).
+4. 표정: three-vrm 내부 불간섭 — 매 프레임 **base Face `morphTargetInfluences` → 새 Face 미러**(머티리얼 이름 1:1).
+
+**제공 형식:** **VRM**(Face 메시 + 눈 본 + 57 모프). base 가 MToon(툰)이라 GLB(PBR)로 빼면 톤이 어긋남 →
+`VRMC_materials_mtoon` 보존 위해 VRM 유지·VRMLoaderPlugin 로드. 표정 메타는 base 익스프레션 재사용.
+VRM 안전 prune 적용(§5) → 11.8→**7.6MB**, 모프 57 보존.
+
+**확장 (구현됨):**
+- **눈 lookAt** — base lookAt(bone)이 돌리는 base 눈 본의 회전을 graft 눈 본에 미러 → 새 얼굴 눈도 추종.
+  시선 *행동*은 정책(drei가 호스트) → composer 데모는 drei식 **범위 내 랜덤 유휴 시선**(엔진 미러가
+  카메라트래킹뿐 아니라 호스트 실제 행동에서도 도는지 선검증). 통합 시 drei 구현으로 교체.
+- **텍스처/머티리얼 축(눈색)** — 얼굴 '모양'(메시)과 **독립**된 별도 축. `setEyeColor`로 EyeIris 머티리얼 색
+  런타임 변경(우측 패널 스와치). 실제 카탈로그는 `baseColorTexture` 교체(저작 PNG 세트)지만 노브는 동일.
+
+**시각 확인 대기:** 얼굴 토글 + 모프 슬라이더 + 시선 추적 + 눈색 스와치.
+**다음:** 형태 모프(Blender 셰이프키) 병행 / 화장(눈썹·아이라인) 텍스처 변형 / 다중 얼굴 카탈로그.

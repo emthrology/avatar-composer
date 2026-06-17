@@ -5,9 +5,9 @@ import { VRMLoaderPlugin, VRM, VRMUtils, VRMHumanBoneName } from '@pixiv/three-v
 import * as THREE from 'three'
 import { BASE_URL, MODULE_PARTS, PartStatus } from './constants'
 import { makeHairCap, makeShirtShell, attachHair, disposeObject } from './dummyParts'
-import { loadPart, loadSpringPart, LoadedPart, LoadedSpringPart } from './partLoader'
+import { loadPart, loadSpringPart, loadFacePart, LoadedPart, LoadedSpringPart, LoadedFacePart } from './partLoader'
 
-type AnyLoadedPart = LoadedPart | LoadedSpringPart
+type AnyLoadedPart = LoadedPart | LoadedSpringPart | LoadedFacePart
 
 interface Props {
   hair: boolean
@@ -16,19 +16,25 @@ interface Props {
   morphName: string
   wave: boolean
   partsVisible: Record<string, boolean>
+  eyeColor: string | null
   onReport: (lines: string[]) => void
   onPartStatus: (id: string, status: PartStatus) => void
 }
 
-export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisible, onReport, onPartStatus }: Props) {
+export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisible, eyeColor, onReport, onPartStatus }: Props) {
   const vrmRef = useRef<VRM | null>(null)
   const hairRef = useRef<THREE.Object3D | null>(null)
   const shirtRef = useRef<THREE.SkinnedMesh | null>(null)
   const partsRef = useRef<Map<string, AnyLoadedPart>>(new Map())
+  const faceRef = useRef<LoadedFacePart | null>(null)
+  // drei식 유휴 시선(정책 — 통합 시 drei 구현으로 교체): 정면 한 점을 범위 내에서 랜덤 드리프트
+  const gazeRef = useRef({ target: new THREE.Object3D(), cur: new THREE.Vector2(), goal: new THREE.Vector2(), t: 0 })
   const waveRef = useRef(wave)
   waveRef.current = wave
   const partsVisibleRef = useRef(partsVisible)
   partsVisibleRef.current = partsVisible
+  const eyeColorRef = useRef(eyeColor)
+  eyeColorRef.current = eyeColor
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const gltf = useGLTF(BASE_URL, true, true, (loader: any) => {
@@ -73,11 +79,16 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
     onReport([...report])
     MODULE_PARTS.forEach((part) => {
       onPartStatus(part.id, 'loading')
-      const load = part.kind === 'spring' ? loadSpringPart : loadPart
+      const load =
+        part.kind === 'spring' ? loadSpringPart : part.kind === 'face' ? loadFacePart : loadPart
       load(part.url, vrm)
         .then((loaded) => {
           if (cancelled) { loaded.dispose(); return }
           partsRef.current.set(part.id, loaded)
+          if (part.kind === 'face') {
+            faceRef.current = loaded as LoadedFacePart
+            faceRef.current.setEyeColor(eyeColorRef.current) // 현재 눈색 반영
+          }
           loaded.setVisible(partsVisibleRef.current[part.id] ?? true) // 현재 토글 반영
           const miss = loaded.missingBones
           report.push(
@@ -100,6 +111,7 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
       cancelled = true
       partsRef.current.forEach((p) => p.dispose())
       partsRef.current.clear()
+      faceRef.current = null
       if (hairRef.current) { hairRef.current.removeFromParent(); disposeObject(hairRef.current); hairRef.current = null }
       if (shirtRef.current) { shirtRef.current.removeFromParent(); disposeObject(shirtRef.current); shirtRef.current = null }
       VRMUtils.deepDispose(vrm.scene)
@@ -114,6 +126,8 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
     MODULE_PARTS.forEach((part) => partsRef.current.get(part.id)?.setVisible(partsVisible[part.id] ?? true))
   }, [partsVisible])
 
+  useEffect(() => { faceRef.current?.setEyeColor(eyeColor) }, [eyeColor])
+
   useEffect(() => {
     const v = vrmRef.current
     if (!v?.expressionManager) return
@@ -124,6 +138,24 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
   useFrame((_, delta) => {
     const v = vrmRef.current
     if (!v) return
+    // 유휴 시선: 정면(+Z) ~1m 앞 한 점을 ±19°/±10° 범위에서 1.4~3.8s마다 새 목표로 랜덤 드리프트(easing).
+    // base lookAt(bone)이 base 눈 본을 돌리고, 교체 얼굴 눈은 loadFacePart.sync()가 미러로 추종.
+    const gz = gazeRef.current
+    if (v.lookAt && v.lookAt.target !== gz.target) v.lookAt.target = gz.target
+    gz.t -= delta
+    if (gz.t <= 0) {
+      gz.t = 1.4 + Math.random() * 2.4
+      gz.goal.set((Math.random() * 2 - 1) * 0.35, (Math.random() * 2 - 1) * 0.18)
+    }
+    gz.cur.lerp(gz.goal, Math.min(1, delta * 2.5))
+    const headBone = v.humanoid.getRawBoneNode(VRMHumanBoneName.Head)
+    if (headBone) {
+      headBone.getWorldPosition(gz.target.position)
+      gz.target.position.x += gz.cur.x
+      gz.target.position.y += gz.cur.y
+      gz.target.position.z += 1.0
+      gz.target.updateMatrixWorld()
+    }
     const armL = v.humanoid.getNormalizedBoneNode(VRMHumanBoneName.LeftUpperArm)
     const armR = v.humanoid.getNormalizedBoneNode(VRMHumanBoneName.RightUpperArm)
     const head = v.humanoid.getNormalizedBoneNode(VRMHumanBoneName.Head)
@@ -137,6 +169,7 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
       if (head) head.rotation.y = 0
     }
     v.update(delta)
+    faceRef.current?.sync() // update 후: base 표정 influences + 눈 lookAt 회전 → 교체된 새 Face/눈 본 미러
   })
 
   if (!vrm) return null

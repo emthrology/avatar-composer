@@ -14,6 +14,7 @@ export function ComposerScene() {
   const [morph, setMorph] = useState(0)
   const [morphName, setMorphName] = useState<string>('happy')
   const [wave, setWave] = useState(false)
+  const [eyeColor, setEyeColor] = useState<string | null>(null) // 텍스처/머티리얼 축: 눈색(null=원본)
   const [report, setReport] = useState<string[]>([])
 
   // 모듈 파츠 가시성 + 로드 상태 (레지스트리 기반 초기화)
@@ -41,7 +42,7 @@ export function ComposerScene() {
           <Suspense fallback={null}>
             <AvatarComposer
               hair={hair} shirt={shirt} morph={morph} morphName={morphName} wave={wave}
-              partsVisible={partsVisible} onReport={setReport} onPartStatus={onPartStatus}
+              partsVisible={partsVisible} eyeColor={eyeColor} onReport={setReport} onPartStatus={onPartStatus}
             />
           </Suspense>
           <OrbitControls makeDefault target={[0, 1.2, 0]} minDistance={0.4} maxDistance={5} />
@@ -79,6 +80,27 @@ export function ComposerScene() {
           <input type="range" min={0} max={1} step={0.01} value={morph}
             onChange={(e) => setMorph(parseFloat(e.target.value))} className="w-full" />
           <span className="text-xs text-gray-500 text-right">{morph.toFixed(2)}</span>
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-gray-800 pt-3">
+          <span className="text-xs text-gray-400">눈색 (텍스처 축 · Face 파츠)</span>
+          <div className="flex gap-1.5 items-center">
+            <button
+              onClick={() => setEyeColor(null)}
+              className={`text-[11px] px-2 py-1 rounded ${eyeColor === null ? 'bg-amber-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+            >
+              원본
+            </button>
+            {['#5a8fd6', '#5fae6b', '#b0553a', '#8a6bd0'].map((c) => (
+              <button
+                key={c}
+                onClick={() => setEyeColor(c)}
+                style={{ backgroundColor: c }}
+                className={`w-6 h-6 rounded-full border-2 ${eyeColor === c ? 'border-white' : 'border-transparent'}`}
+                title={c}
+              />
+            ))}
+          </div>
         </div>
 
         <div className="mt-auto border-t border-gray-800 pt-3">
