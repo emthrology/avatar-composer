@@ -8,6 +8,7 @@
     "prebuild": "node scripts/extractParts.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "assets": "node scripts/extractParts.mjs && node scripts/renderThumbs.mjs",
     "thumbs": "node scripts/renderThumbs.mjs"
   },
   "dependencies": {

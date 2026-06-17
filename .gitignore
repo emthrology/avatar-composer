@@ -7,7 +7,8 @@ dist/
 .vercel
 *.tsbuildinfo
 
-# 파생 파츠 — scripts/extractParts.mjs 로 소스 VRM 에서 재생성 (prebuild 훅)
+# 파생 파츠(GLB/VRM) — Vercel 빌드의 prebuild 훅이 소스 VRM 에서 순수-node 로 재생성하므로
+#   리포에 안 넣는다(용량 ~17MB). 로컬은 npm run assets 로 갱신.
 public/avatars/Hair_sample.vrm
 public/avatars/male1/Tops_white_shirt.glb
 public/avatars/male1/Tops_basic.glb
@@ -17,5 +18,5 @@ public/avatars/male1/Bottoms_jean.glb
 public/avatars/male1/Bottoms_white_pants.glb
 public/avatars/male1/Face_eyesample.vrm
 
-# 파생 썸네일 — scripts/renderThumbs.mjs 로 재생성 (npm run thumbs)
-public/avatars/thumbs/
+# 파생 썸네일(PNG)은 ★커밋★한다 — puppeteer 가 필요해 Vercel 빌드에서 재생성 불가.
+#   소스처럼 취급: 소스 VRM 변경 시 npm run assets 로 갱신 후 커밋. (public/avatars/thumbs/)
