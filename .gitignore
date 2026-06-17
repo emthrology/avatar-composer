@@ -10,5 +10,12 @@ dist/
 # 파생 파츠 — scripts/extractParts.mjs 로 소스 VRM 에서 재생성 (prebuild 훅)
 public/avatars/Hair_sample.vrm
 public/avatars/male1/Tops_white_shirt.glb
+public/avatars/male1/Tops_basic.glb
+public/avatars/male1/Tops_hawaian.glb
 public/avatars/male1/Bottoms_scotch_pants.glb
+public/avatars/male1/Bottoms_jean.glb
+public/avatars/male1/Bottoms_white_pants.glb
 public/avatars/male1/Face_eyesample.vrm
+
+# 파생 썸네일 — scripts/renderThumbs.mjs 로 재생성 (npm run thumbs)
+public/avatars/thumbs/

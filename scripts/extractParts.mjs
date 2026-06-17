@@ -31,8 +31,14 @@ const BIN_CHUNK = 0x004e4942
 
 // ── 추출 잡 정의 ── (부위 추가 = 여기에 한 줄)
 const JOBS = [
+  // 상의 변형(Body 메시에서 Tops_01_CLOTH 프리미티브만 추출)
   { src: 'male1/parts/male_white_shirt.vrm',  mesh: 'Body', keepMaterial: 'Tops_01_CLOTH',    out: 'male1/Tops_white_shirt.glb',    vrm: false },
+  { src: 'male1/parts/male_top_basic.vrm',    mesh: 'Body', keepMaterial: 'Tops_01_CLOTH',    out: 'male1/Tops_basic.glb',          vrm: false },
+  { src: 'male1/parts/male_top_hawaian.vrm',  mesh: 'Body', keepMaterial: 'Tops_01_CLOTH',    out: 'male1/Tops_hawaian.glb',        vrm: false },
+  // 하의 변형(Bottoms_01_CLOTH / 흰 바지는 Onepiece_00_CLOTH 2프리미티브)
   { src: 'male1/parts/male_scotch_pants.vrm', mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'male1/Bottoms_scotch_pants.glb', vrm: false },
+  { src: 'male1/parts/male_bottom_jean.vrm',  mesh: 'Body', keepMaterial: 'Bottoms_01_CLOTH', out: 'male1/Bottoms_jean.glb',         vrm: false },
+  { src: 'male1/parts/male_bottom_white_pants.vrm', mesh: 'Body', keepMaterial: 'Onepiece_00_CLOTH', out: 'male1/Bottoms_white_pants.glb', vrm: false },
   { src: 'male_sample.vrm',                   mesh: 'Hair',                                     out: 'Hair_sample.vrm', vrm: true, springKeep: 'Hair', nsBones: '^J_Sec_.*Hair' },
   // 얼굴(B트랙): Face 메시 통째(8 머티리얼·57 모프). **VRM 으로** 추출 — base 가 MToon(툰 셰이딩)이라
   //   GLB(PBR)로 빼면 톤이 어긋남 → VRMC_materials_mtoon 보존 위해 VRM 유지(VRMLoaderPlugin 로드).

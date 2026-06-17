@@ -3,11 +3,12 @@ import { useGLTF } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { VRMLoaderPlugin, VRM, VRMUtils, VRMHumanBoneName } from '@pixiv/three-vrm'
 import * as THREE from 'three'
-import { BASE_URL, MODULE_PARTS, PartStatus } from './constants'
+import { BASE_URL, CATALOG, PartCategory, PartStatus, Selection, VARIANTS_BY_ID } from './constants'
 import { makeHairCap, makeShirtShell, attachHair, disposeObject } from './dummyParts'
 import { loadPart, loadSpringPart, loadFacePart, LoadedPart, LoadedSpringPart, LoadedFacePart } from './partLoader'
 
 type AnyLoadedPart = LoadedPart | LoadedSpringPart | LoadedFacePart
+interface Slot { variantId: string; loaded: AnyLoadedPart }
 
 interface Props {
   hair: boolean
@@ -15,24 +16,24 @@ interface Props {
   morph: number
   morphName: string
   wave: boolean
-  partsVisible: Record<string, boolean>
+  selection: Selection
   eyeColor: string | null
   onReport: (lines: string[]) => void
   onPartStatus: (id: string, status: PartStatus) => void
 }
 
-export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisible, eyeColor, onReport, onPartStatus }: Props) {
+export function AvatarComposer({ hair, shirt, morph, morphName, wave, selection, eyeColor, onReport, onPartStatus }: Props) {
   const vrmRef = useRef<VRM | null>(null)
   const hairRef = useRef<THREE.Object3D | null>(null)
   const shirtRef = useRef<THREE.SkinnedMesh | null>(null)
-  const partsRef = useRef<Map<string, AnyLoadedPart>>(new Map())
+  // 카테고리 슬롯: 슬롯당 1개 active. genRef 는 async 로드 레이스(빠른 연속 선택) 가드.
+  const slotsRef = useRef<Map<PartCategory, Slot>>(new Map())
+  const genRef = useRef<Map<PartCategory, number>>(new Map())
   const faceRef = useRef<LoadedFacePart | null>(null)
   // drei식 유휴 시선(정책 — 통합 시 drei 구현으로 교체): 정면 한 점을 범위 내에서 랜덤 드리프트
   const gazeRef = useRef({ target: new THREE.Object3D(), cur: new THREE.Vector2(), goal: new THREE.Vector2(), t: 0 })
   const waveRef = useRef(wave)
   waveRef.current = wave
-  const partsVisibleRef = useRef(partsVisible)
-  partsVisibleRef.current = partsVisible
   const eyeColorRef = useRef(eyeColor)
   eyeColorRef.current = eyeColor
 
@@ -44,88 +45,73 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, partsVisib
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vrm: VRM | undefined = (gltf as any).userData?.vrm
 
+  // ─── 베이스 로드 + 더미 ①②③ (스캐폴딩, dev 드로어) ──────────────────────────
   useEffect(() => {
     if (!vrm) return
     vrmRef.current = vrm
     VRMUtils.rotateVRM0(vrm)
 
     const report: string[] = []
-
-    // ① 리지드 부착
     const cap = makeHairCap()
-    if (attachHair(vrm, cap)) {
-      hairRef.current = cap
-      report.push('① 리지드 부착: head 본에 헤어 ✅')
-    } else {
-      report.push('① 리지드 부착: head 원시 본 없음 ❌')
-    }
-
-    // ② 스킨드 rebind
+    report.push(attachHair(vrm, cap) ? (hairRef.current = cap, '① 리지드 부착: head 본에 헤어 ✅') : '① 리지드 부착: head 원시 본 없음 ❌')
     const shell = makeShirtShell(vrm)
-    if (shell) {
-      vrm.scene.add(shell)
-      shirtRef.current = shell
-      report.push(`② 스킨드 rebind: 새 SkinnedMesh bind() ✅ (본 ${shell.skeleton.bones.length})`)
-    } else {
-      report.push('② 스킨드 rebind: 소스 SkinnedMesh 없음 ❌')
-    }
-
-    // ③ 모프
+    if (shell) { vrm.scene.add(shell); shirtRef.current = shell; report.push(`② 스킨드 rebind: 새 SkinnedMesh bind() ✅ (본 ${shell.skeleton.bones.length})`) }
+    else report.push('② 스킨드 rebind: 소스 SkinnedMesh 없음 ❌')
     const names = vrm.expressionManager?.expressions?.map((e) => e.expressionName) ?? []
     report.push(`③ 모프: expression ${names.length}종`)
-
-    // ④⑤ 모듈 파츠 레지스트리 순회 — 부위별 독립 로드·장착
-    let cancelled = false
-    onReport([...report])
-    MODULE_PARTS.forEach((part) => {
-      onPartStatus(part.id, 'loading')
-      const load =
-        part.kind === 'spring' ? loadSpringPart : part.kind === 'face' ? loadFacePart : loadPart
-      load(part.url, vrm)
-        .then((loaded) => {
-          if (cancelled) { loaded.dispose(); return }
-          partsRef.current.set(part.id, loaded)
-          if (part.kind === 'face') {
-            faceRef.current = loaded as LoadedFacePart
-            faceRef.current.setEyeColor(eyeColorRef.current) // 현재 눈색 반영
-          }
-          loaded.setVisible(partsVisibleRef.current[part.id] ?? true) // 현재 토글 반영
-          const miss = loaded.missingBones
-          report.push(
-            miss.length
-              ? `[${part.id}] ${part.label} 장착 ✅ but 누락 본 ${miss.length} ⚠️ (${miss.slice(0, 3).join(', ')}) — ASSET_SPEC §1`
-              : `[${part.id}] ${part.label} 장착 ✅ (${part.kind})`,
-          )
-          onReport([...report])
-          onPartStatus(part.id, 'loaded')
-        })
-        .catch((err) => {
-          if (cancelled) return
-          report.push(`[${part.id}] ${part.label} 실패 ❌ (${String(err).slice(0, 50)})`)
-          onReport([...report])
-          onPartStatus(part.id, 'error')
-        })
-    })
+    report.push('④ 모듈 파츠: 슬롯 선택으로 조립(카탈로그 피커)')
+    onReport(report)
 
     return () => {
-      cancelled = true
-      partsRef.current.forEach((p) => p.dispose())
-      partsRef.current.clear()
+      slotsRef.current.forEach((s) => s.loaded.dispose())
+      slotsRef.current.clear()
       faceRef.current = null
       if (hairRef.current) { hairRef.current.removeFromParent(); disposeObject(hairRef.current); hairRef.current = null }
       if (shirtRef.current) { shirtRef.current.removeFromParent(); disposeObject(shirtRef.current); shirtRef.current = null }
       VRMUtils.deepDispose(vrm.scene)
     }
-  }, [vrm, onReport, onPartStatus])
+  }, [vrm, onReport])
+
+  // ─── 슬롯 선택·교체 엔진 ────────────────────────────────────────────────────
+  // 카테고리별 desired(selection) vs 현재 슬롯 diff → 다르면 기존 dispose 후 새 변형 load.
+  // null 이면 슬롯 비움. genRef 토큰으로 늦게 끝난 이전 로드를 폐기(레이스 차단).
+  useEffect(() => {
+    const base = vrmRef.current
+    if (!base) return
+    const apply = async (cat: PartCategory, desired: string | null) => {
+      const slot = slotsRef.current.get(cat)
+      if ((slot?.variantId ?? null) === desired) return
+      const gen = (genRef.current.get(cat) ?? 0) + 1
+      genRef.current.set(cat, gen)
+      if (slot) {
+        slot.loaded.dispose()
+        slotsRef.current.delete(cat)
+        if (cat === 'face') faceRef.current = null
+      }
+      if (!desired) { onPartStatus(cat, 'idle'); return }
+      const resolved = VARIANTS_BY_ID.get(desired)
+      if (!resolved) { onPartStatus(cat, 'error'); return }
+      onPartStatus(cat, 'loading')
+      const load = resolved.kind === 'spring' ? loadSpringPart : resolved.kind === 'face' ? loadFacePart : loadPart
+      try {
+        const loaded = await load(resolved.variant.url, base)
+        if (genRef.current.get(cat) !== gen) { loaded.dispose(); return } // 더 새 선택이 들어옴
+        slotsRef.current.set(cat, { variantId: desired, loaded })
+        if (cat === 'face') { faceRef.current = loaded as LoadedFacePart; faceRef.current.setEyeColor(eyeColorRef.current) }
+        loaded.setVisible(true)
+        if (loaded.missingBones.length) console.warn(`[${cat}] 누락 본 ${loaded.missingBones.length}:`, loaded.missingBones.slice(0, 3))
+        onPartStatus(cat, 'loaded')
+      } catch (err) {
+        if (genRef.current.get(cat) !== gen) return
+        console.error(`[${cat}] 로드 실패`, err)
+        onPartStatus(cat, 'error')
+      }
+    }
+    CATALOG.forEach((c) => apply(c.id, selection[c.id] ?? null))
+  }, [vrm, selection, onPartStatus])
 
   useEffect(() => { if (hairRef.current) hairRef.current.visible = hair }, [hair])
   useEffect(() => { if (shirtRef.current) shirtRef.current.visible = shirt }, [shirt])
-
-  // 모듈 파츠 가시성 토글 (디버그 패널 → 로드된 실제 파츠)
-  useEffect(() => {
-    MODULE_PARTS.forEach((part) => partsRef.current.get(part.id)?.setVisible(partsVisible[part.id] ?? true))
-  }, [partsVisible])
-
   useEffect(() => { faceRef.current?.setEyeColor(eyeColor) }, [eyeColor])
 
   useEffect(() => {
