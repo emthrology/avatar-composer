@@ -31,7 +31,7 @@ export function CatalogPicker({ selection, status, onSelect, eyeColor, onEyeColo
               active === c.id ? 'border-sky-400 text-sky-300' : 'border-transparent text-gray-400 hover:text-gray-200'
             }`}
           >
-            <span className="mr-1">{c.icon}</span>{c.label}
+            {c.label}
           </button>
         ))}
       </div>

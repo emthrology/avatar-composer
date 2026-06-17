@@ -29,7 +29,7 @@ export const PART_PREFIX = {
 // 필요로 하는 엔진 형태다. VRoid식 피커가 이 카탈로그를 탭/그리드로 그린다.
 //   kind: 'static' = loadPart(GLB, 정적 스킨드) / 'spring' = loadSpringPart(VRM, VRMC_springBone)
 //        'face'   = loadFacePart(VRM, Face 메시 교체 + 눈 본 graft + 표정 모프 미러)
-//   변형 추가 = 소스 드롭 → scripts/extractParts.mjs JOBS 1줄 → 아래 variants 1줄 → npm run thumbs
+//   변형 추가 = 소스 드롭 → scripts/extractParts.mjs JOBS 1줄 → 아래 variants 1줄 → npm run assets
 //   단일 베이스(male1) 가정. 남자2 도착 시 이 카탈로그를 characters[] 로 승격(INTEGRATION 원칙 5).
 export type PartStatus = 'idle' | 'loading' | 'loaded' | 'missing' | 'error'
 export type PartKind = 'static' | 'spring' | 'face'
@@ -45,7 +45,6 @@ export interface PartVariant {
 export interface PartCategoryDef {
   id: PartCategory
   label: string       // 탭 라벨
-  icon: string        // 탭 아이콘(이모지)
   kind: PartKind      // 로더 선택
   allowNone: boolean  // '원본/없음' 선택 허용
   variants: PartVariant[]
@@ -55,19 +54,19 @@ const thumb = (id: string) => `/avatars/thumbs/${id}.png`
 
 export const CATALOG: PartCategoryDef[] = [
   {
-    id: 'face', label: 'Face', icon: '🙂', kind: 'face', allowNone: true,
+    id: 'face', label: 'Face', kind: 'face', allowNone: true,
     variants: [
       { id: 'face-eyesample', label: '눈 변형', url: '/avatars/male1/Face_eyesample.vrm', thumb: thumb('face-eyesample') },
     ],
   },
   {
-    id: 'hair', label: 'Hair', icon: '💇', kind: 'spring', allowNone: true,
+    id: 'hair', label: 'Hair', kind: 'spring', allowNone: true,
     variants: [
       { id: 'hair-sample', label: '기본 헤어', url: '/avatars/Hair_sample.vrm', thumb: thumb('hair-sample') },
     ],
   },
   {
-    id: 'tops', label: 'Tops', icon: '👕', kind: 'static', allowNone: true,
+    id: 'tops', label: 'Tops', kind: 'static', allowNone: true,
     variants: [
       { id: 'tops-white-shirt', label: '화이트 셔츠', url: '/avatars/male1/Tops_white_shirt.glb', thumb: thumb('tops-white-shirt') },
       { id: 'tops-basic',       label: '베이직 티',   url: '/avatars/male1/Tops_basic.glb',       thumb: thumb('tops-basic') },
@@ -75,7 +74,7 @@ export const CATALOG: PartCategoryDef[] = [
     ],
   },
   {
-    id: 'bottoms', label: 'Bottoms', icon: '👖', kind: 'static', allowNone: true,
+    id: 'bottoms', label: 'Bottoms', kind: 'static', allowNone: true,
     variants: [
       { id: 'bottoms-scotch-pants', label: '스카치 팬츠', url: '/avatars/male1/Bottoms_scotch_pants.glb', thumb: thumb('bottoms-scotch-pants') },
       { id: 'bottoms-jean',         label: '청바지',     url: '/avatars/male1/Bottoms_jean.glb',         thumb: thumb('bottoms-jean') },

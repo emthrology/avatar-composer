@@ -2,8 +2,12 @@
 //   1) vite dev 서버 기동(public/ 라이브 서빙 — 파생 파츠도 그대로)
 //   2) 앱에서 window.__CATALOG 읽어 변형 목록 확보
 //   3) 각 변형을 ?thumb=<cat>:<id> 로 방문 → window.__thumbReady 대기 → 스냅샷(투명 배경)
-//   4) public/avatars/thumbs/<id>.png 저장 (gitignore, npm run thumbs 로 재생성)
-// 실행: node scripts/renderThumbs.mjs  (또는 npm run thumbs)
+//   4) public/avatars/thumbs/<id>.png 저장
+//
+// puppeteer(Chromium)가 필요해 Vercel 빌드에선 못 돈다 → 산출 PNG 는 ★커밋★한다(소스 취급).
+// 파츠 추출(extractParts)과 한 묶음으로: `npm run assets` = extractParts → renderThumbs.
+// 소스 VRM 추가/변경 시 npm run assets 한 번 → 파츠·썸네일 동시 갱신 후 썸네일 커밋.
+// 실행: node scripts/renderThumbs.mjs (또는 npm run thumbs / 통합: npm run assets)
 
 import { spawn } from 'child_process'
 import fs from 'fs'
