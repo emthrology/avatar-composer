@@ -15,19 +15,25 @@ VRoid 통짜 export 안에서 분리 가능한 최소 단위는 **머티리얼**
 머지 메시 주의: VRoid는 **버텍스 버퍼를 공유하고 프리미티브를 `indices`로 구분**한다. 본 사용 분석은
 반드시 인덱스 기준으로 해야 정확(전체 버텍스로 보면 프리미티브가 다 같아 보임).
 
-## 2. 실측 카탈로그 (male1 셔츠/바지)
+## 2. 실측 카탈로그 (male1)
 
-| 파츠 | 머티리얼 | 실버텍스 | base 누락 본 | 바인드 정합 | 스프링 | 로더 |
-|---|---|---|---|---|---|---|
-| Tops (셔츠) | `Tops_01_CLOTH` | 1,691 | 0 | **0.00mm** | (CoatSkirt 잔존, 미가중) | `loadPart`(GLB) |
-| Tie (넥타이) | `Accessory_Tie_01_CLOTH` | 145 | 0 | 0.00mm | — | (보류) |
-| Bottoms (바지) | `Bottoms_01_CLOTH` | 1,076 | 0 | 0.00mm | 0 | `loadPart`(GLB) |
+| 카테고리 | 변형 | 머티리얼 | base 누락 본(보조) | 로더 |
+|---|---|---|---|---|
+| Tops | 화이트셔츠 | `Tops_01_CLOTH` | CoatSkirt(미가중) | `loadPart`(GLB) |
+| Tops | 베이직 티 | `Tops_01_CLOTH` | `J_Sec_*TopsUpperArm*`(소매 **가중** → graft) | `loadPart` |
+| Tops | 하와이안 | `Tops_01_CLOTH` | CoatSkirt → graft | `loadPart` |
+| Bottoms | 스카치/청바지 | `Bottoms_01_CLOTH` | 0 | `loadPart` |
+| Bottoms | 화이트팬츠 | `Onepiece_00_CLOTH`(2 prim) | 0 | `loadPart` |
+| (Tie) | 넥타이 | `Accessory_Tie_01_CLOTH` | 0 | (보류) |
 
 핵심: **base 기반으로 저작하면 0 누락 · 0.00mm 정합** → 오프셋 없이 딱 맞는다(ASSET_SPEC §1 신장 락의 보상).
 다른 신장 파일에서 빌리면 균일 오프셋이 생긴다(male_sample = 2.5cm).
 
-VRoid 의상 템플릿엔 `J_Sec_*_CoatSkirt*` 같은 스프링 본이 딸려오지만, 짧은 옷은 거기 메시가 안 물린다
-→ 정적 파츠로 취급(미가중 본은 `loadPart`가 누락 보고에서 제외).
+**보조 본 graft (중요):** VRoid 의상 템플릿엔 소매·옷자락 흔들림용 secondary 본(`J_Sec_*TopsUpperArm*`,
+`J_Sec_*CoatSkirt*`)이 딸려온다. 거기 메시가 **안 물리면**(짧은 옷) 정적 파츠로 무시하면 되지만, **물리면**
+(베이직 티 소매) 그 본이 맨몸 base에 없어 rebind 실패 → 정점이 A-pose에 고정(소매가 옆으로 뻗음). →
+`loadPart`의 `graftAuxBones`가 **부모가 base에 있는 보조 본을 그 부모(예: UpperArm) 아래로 reparent**(local
+보존) → base 본을 리지드로 추종해 rebind 매칭. 스프링은 안 붙어 정적이지만 정적 의류엔 충분. (헤어 graft와 동형.)
 
 ## 3. 제공 형식
 
@@ -43,7 +49,8 @@ VRoid 의상 템플릿엔 `J_Sec_*_CoatSkirt*` 같은 스프링 본이 딸려오
 2. **GLB prune** — `gltf-transform` `prune()`+`dedup()`로 끊긴 메시·미사용 머티리얼/텍스처/액세서리 회수.
    **~13MB → 1\~2MB** (Tops 13.5→1.0, Bottoms 14.2→1.8). 정적 GLB 한정(확장 없어 무손실).
 
-런타임은 `MODULE_PARTS` 레지스트리를 순회해 부위별 독립 장착·토글. 파생 파일은 gitignore + `prebuild` 훅 재생성.
+런타임은 `CATALOG`(카테고리→변형) 기반으로 **슬롯당 1개 선택·교체**(swap-on-select). 파생 파일은 gitignore +
+`prebuild` 훅 재생성. → 상세 §7.
 
 ## 5. 라이브러리화 진척
 
@@ -59,9 +66,11 @@ VRoid 의상 템플릿엔 `J_Sec_*_CoatSkirt*` 같은 스프링 본이 딸려오
   (material/texture/image 인덱스만 이동·갱신). 헤어 11.3→9.9MB, 얼굴 11.8→**7.6MB**, 무결성·모프 57 검증.
   → 모프 prune은 **의도적으로 안 함**(57 중 14만 쓰지만 확장성 위해 보존).
 
+- ✅ **다양화 + 카탈로그 + 피커 + 썸네일** — §7.
+
 **남은 과제**
 - **vertex 압축** — 머티리얼 분리 후에도 POSITION이 메시 공유 버퍼라 미사용 verts 잔존. 인덱스 기준 재패킹 시 추가 ↓.
-- **manifest 화** — `MODULE_PARTS` 하드코딩 → 추출 산출 `manifest.json`(id/카테고리/형식/썸네일) 구동 셀렉터.
+- **manifest 화** — `CATALOG`(코드)가 토대. 추출 산출 `manifest.json`(id/카테고리/형식/썸네일) 자동생성으로 진화.
 - **batch** — 소스 디렉터리 일괄 → 라이브러리 + manifest 생성, 멱등 재실행.
 
 ## 6. 얼굴 트랙 (B): 형태 변형은 메시 교체 [PoC]
@@ -94,3 +103,24 @@ VRM 안전 prune 적용(§5) → 11.8→**7.6MB**, 모프 57 보존.
 
 **시각 확인 대기:** 얼굴 토글 + 모프 슬라이더 + 시선 추적 + 눈색 스와치.
 **다음:** 형태 모프(Blender 셰이프키) 병행 / 화장(눈썹·아이라인) 텍스처 변형 / 다중 얼굴 카탈로그.
+
+## 7. 다양화 + 카탈로그 + VRoid식 피커 [구현됨]
+
+PoC(카테고리당 1개·마운트 시 전부 로드)에서 **카탈로그 + 슬롯 교체 엔진**으로 승격. drei 에디터 탭이
+실제로 필요로 하는 형태(INTEGRATION.md). 변형 추가 = **소스 드롭 → JOBS 1줄 → CATALOG 1줄 → `npm run thumbs`**.
+
+**데이터 모델 (`constants.ts`):** `CATALOG`(카테고리→변형 N개) + `VARIANTS_BY_ID`/`Selection`/`defaultSelection`.
+현재 male1: 얼굴 1 · 헤어 1 · 상의 3(화이트셔츠/베이직/하와이안) · 하의 3(스카치/청바지/화이트팬츠) + '원본/없음'.
+
+**슬롯 엔진 (`AvatarComposer`):** 카테고리 슬롯당 1개 active. `selection` 변경 시 desired vs 현재 diff →
+기존 dispose 후 새 변형 load(null이면 비움). 슬롯당 `genRef` 토큰으로 빠른 연속 선택 async 레이스 가드.
+
+**피커 UI (`ui/CatalogPicker`·`VariantCard`):** VRoid식 상단 탭 + 변형 썸네일 그리드 + 원본 카드 + 눈색 스와치.
+`ComposerScene` = 좌측 피커 + 우측 3D + 접이식 dev 드로어(스캐폴딩 격리). → 통합 시 drei 에디터 탭이 대체.
+
+**오프라인 썸네일 (`?thumb=` 모드 + `scripts/renderThumbs.mjs`):** 파츠를 base 조립 없이 **단독 로드**해
+바운딩 fit 카메라로 렌더(조립 타이밍 의존 제거 — 초기엔 조립 후 클로즈업 시도했으나 슬롯/StrictMode 타이밍에
+휘둘려 옷이 안 찍힘). tops/bottoms는 몸통/다리 X크롭 클로즈업, face는 패딩 당김. puppeteer로 투명 PNG 스냅샷,
+`public/avatars/thumbs/`(gitignore). VRM=MToon 보존, GLB=PBR.
+
+**다음:** female1을 male1 기반으로 추가 → `CATALOG`를 캐릭터 축(`characters[]`)으로 승격(INTEGRATION 원칙 5).
