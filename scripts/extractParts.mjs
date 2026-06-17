@@ -5,12 +5,24 @@
 // 방식: raw glTF 수술. VRoid 통짜 export 안에서 부위는 이미 별도 mesh/머티리얼(프리미티브)다.
 //   '모든 노드 + bin 통째 유지' → 스프링/콜라이더/IBM의 node·accessor 참조가 그대로 유효.
 //   타깃 mesh만 노드에 남기고(필요시 머티리얼로 프리미티브까지 필터) 나머지 mesh 참조를 끊는다.
-//   ※ 본 prune은 아직 안 함(파일 비대) → 후속 gltf-transform 단계 과제. loadPart 는 미사용 본을
-//     'weighted 일 때만' 누락 보고하므로 기능엔 무해.
+//
+// 본/지오메트리/텍스처 prune (GLB 전용):
+//   raw 수술은 참조 무결성을 위해 끊긴 Face 메시·미사용 머티리얼·텍스처를 bin에 통째로 남긴다
+//   (파츠당 ~13MB). 정적 GLB는 확장이 없어 안전하므로 gltf-transform prune+dedup으로 회수한다
+//   → ~1MB. VRM(스프링)은 gltf-transform이 VRMC_springBone을 모르고 써내며 떨궈버리므로 prune
+//   대상에서 제외(raw 유지). VRM 본 prune은 VRM 인지 prune 도입 후 후속 과제.
+//
+// 스프링 본 네임스페이싱 (VRM 전용):
+//   VRoid는 헤어마다 J_Sec_Hair* 본 이름을 재사용한다 → 여러 스프링 파츠를 동시에 base Head로
+//   이식하면 이름 충돌(rebind 가 엉뚱한 본에 매칭). 추출 시 헤어 스프링 노드 name에 파츠 prefix를
+//   붙여 전역 고유화한다. 스프링/스킨 조인트는 인덱스 참조라 name 변경에 안전하고, 런타임 매칭
+//   (/Hair/i graft + 정확한 이름 rebind)은 prefix가 붙어도 'Hair' 부분문자열·고유성 모두 유지.
 //
 // 실행: node scripts/extractParts.mjs
 
 import fs from 'fs'
+import { NodeIO } from '@gltf-transform/core'
+import { prune, dedup } from '@gltf-transform/functions'
 
 const DIR = 'public/avatars'
 const MAGIC = 0x46546c67
@@ -62,6 +74,15 @@ function packGLB(json, bin) {
   return out
 }
 
+// gltf-transform prune+dedup 으로 GLB 압축(끊긴 메시·미사용 머티리얼/텍스처/액세서리 제거).
+// 정적 GLB 한정 — VRM 확장이 없어 무손실로 안전.
+async function pruneGlb(path) {
+  const io = new NodeIO()
+  const doc = await io.read(path)
+  await doc.transform(prune(), dedup())
+  await io.write(path, doc)
+}
+
 function runJob(job) {
   const { json: g, bin } = parseGLB(`${DIR}/${job.src}`)
 
@@ -84,6 +105,7 @@ function runJob(job) {
     if (n.mesh !== undefined && n.mesh !== meshIdx) delete n.mesh
   })
 
+  let renamed = 0
   if (job.vrm) {
     // VRM 유지: 스프링을 지정 체인만 남김(노드 인덱스 보존 → 참조 유효)
     const sb = g.extensions?.VRMC_springBone
@@ -92,6 +114,14 @@ function runJob(job) {
         s.joints?.some((j) => (g.nodes[j.node]?.name ?? '').includes(job.springKeep)),
       )
     }
+    // 스프링 본 네임스페이싱: 헤어 스프링 노드(J_Sec_*Hair*)에 파츠 prefix → 다중 파츠 충돌 방지
+    const prefix = job.ns ?? job.out.split('/').pop().replace(/\.\w+$/, '')
+    g.nodes.forEach((n) => {
+      if (n.name && /^J_Sec_/.test(n.name) && /Hair/i.test(n.name)) {
+        n.name = `${prefix}__${n.name}`
+        renamed++
+      }
+    })
   } else {
     // GLB: VRM 확장 제거(순수 GLTFLoader)
     delete g.extensionsRequired
@@ -99,17 +129,24 @@ function runJob(job) {
   }
 
   fs.writeFileSync(`${DIR}/${job.out}`, packGLB(g, bin))
+  return { meshIdx, renamed }
+}
+
+for (const job of JOBS) {
+  const { meshIdx, renamed } = runJob(job)
+  if (!job.vrm) await pruneGlb(`${DIR}/${job.out}`) // GLB만 prune
 
   // 자가검수
   const re = parseGLB(`${DIR}/${job.out}`)
   const rn = re.json.nodes.filter((n) => n.mesh !== undefined)
   const mb = (fs.statSync(`${DIR}/${job.out}`).size / 1024 / 1024).toFixed(1)
   const springs = re.json.extensions?.VRMC_springBone?.springs?.length
-  const prims = re.json.meshes[meshIdx].primitives.length
+  // 렌더되는 mesh(노드가 참조하는 것)의 prim 만 집계 — prune 으로 mesh 인덱스가 바뀌어도, VRM 의
+  // 죽은 mesh(참조 끊김)가 남아 있어도 정확.
+  const renderedMeshes = new Set(rn.map((n) => n.mesh))
+  const prims = [...renderedMeshes].reduce((s, mi) => s + re.json.meshes[mi].primitives.length, 0)
   console.log(
     `✅ ${job.out} (${mb}MB) 렌더노드 ${rn.length}·prim ${prims}` +
-      (job.vrm ? ` · 스프링 ${springs}` : ' · GLB'),
+      (job.vrm ? ` · 스프링 ${springs} · 네임스페이스 ${renamed}본` : ' · GLB·pruned'),
   )
 }
-
-for (const job of JOBS) runJob(job)

@@ -37,15 +37,26 @@ VRoid 의상 템플릿엔 `J_Sec_*_CoatSkirt*` 같은 스프링 본이 딸려오
 
 ## 4. 추출 파이프라인 (현재)
 
-`scripts/extractParts.mjs` — 잡(JOB) 선언으로 소스 VRM에서 부위 추출(raw glTF 수술: 타깃 mesh만 남기고
-머티리얼로 프리미티브 필터, 노드·bin 통째 유지). 런타임은 `MODULE_PARTS` 레지스트리를 순회해 부위별 독립
-장착·토글. 파생 파일은 gitignore + `prebuild` 훅 재생성.
+`scripts/extractParts.mjs` — 잡(JOB) 선언으로 소스 VRM에서 부위 추출. 2단:
+1. **raw glTF 수술** — 타깃 mesh만 남기고 머티리얼로 프리미티브 필터, 노드·bin 통째 유지(스프링/콜라이더/
+   IBM 참조 무결성 보존).
+2. **GLB prune** — `gltf-transform` `prune()`+`dedup()`로 끊긴 메시·미사용 머티리얼/텍스처/액세서리 회수.
+   **~13MB → 1\~2MB** (Tops 13.5→1.0, Bottoms 14.2→1.8). 정적 GLB 한정(확장 없어 무손실).
 
-## 5. 라이브러리화로 가는 남은 과제
+런타임은 `MODULE_PARTS` 레지스트리를 순회해 부위별 독립 장착·토글. 파생 파일은 gitignore + `prebuild` 훅 재생성.
 
-- **본 prune** — 현재 노드·bin 통째 유지라 파츠당 ~13MB. `gltf-transform`으로 미사용 본/지오메트리/텍스처
-  제거 → KB급. (다음 큰 과제)
-- **스프링 본 네임스페이싱** — VRoid가 헤어마다 `J_Sec_Hair*` 이름 재사용 → 다중 스프링 파츠 동시 로드 시
-  충돌. 추출 시 파츠 prefix로 리네임 필요.
+## 5. 라이브러리화 진척
+
+**완료**
+- ✅ **GLB 본/지오메트리/텍스처 prune** — §4-2. 스킨 73조인트·가중 본 이름 전부 보존 → rebind 0 누락 무변.
+  (잔여: POSITION이 메시 공유 버퍼라 7,431 verts 중 1,691만 쓰는데도 통째 잔존 ≈ 1MB. vertex 압축은 후속.)
+- ✅ **스프링 본 네임스페이싱** — 헤어 스프링 노드(`J_Sec_*Hair*`) 45개에 파츠 prefix(`Hair_sample__`) 부여 →
+  다중 스프링 파츠 동시 로드 시 이름 충돌 제거. node 참조는 인덱스라 무손상, 런타임 `/Hair/i` 매칭·고유성 유지.
+  humanoid(`J_Bip_*`)·Bust·CoatSkirt 불간섭.
+
+**남은 과제**
+- **VRM 인지 prune** — 헤어 VRM은 `VRMC_springBone`을 gltf-transform이 모르고 떨궈서 prune 제외(현 11MB).
+  VRM 확장 등록 후 동일 압축 적용 필요.
+- **vertex 압축** — 머티리얼 분리 후에도 POSITION이 메시 공유 버퍼라 미사용 verts 잔존. 인덱스 기준 재패킹 시 추가 ↓.
 - **manifest 화** — `MODULE_PARTS` 하드코딩 → 추출 산출 `manifest.json`(id/카테고리/형식/썸네일) 구동 셀렉터.
 - **batch** — 소스 디렉터리 일괄 → 라이브러리 + manifest 생성, 멱등 재실행.
