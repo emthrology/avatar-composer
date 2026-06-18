@@ -1,4 +1,4 @@
-import { VRM, VRMHumanBoneName, VRMLoaderPlugin } from '@pixiv/three-vrm'
+import { VRM, VRMHumanBoneName, VRMLoaderPlugin, MToonMaterial } from '@pixiv/three-vrm'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
@@ -90,6 +90,57 @@ function rebindToBase(
   sm.frustumCulled = false // 변형으로 바운딩박스가 어긋나 컬링되는 사고 방지
 }
 
+// ─── MToon 입히기 (옷 GLB 파츠) ──────────────────────────────────────────────
+// 옷 파츠는 추출 시 gltf-transform prune 이 VRMC_materials_mtoon 을 떨궈 PBR(MeshStandardMaterial)
+// 로 로드된다 → 베이스 몸체·얼굴(MToon 툰)과 톤이 어긋난다. 런타임에 베이스컬러 텍스처/색을 옮겨
+// MToonMaterial 로 재구성해 톤을 맞춘다. 저작 shade 색은 prune 에서 소실 → male_base.vrm 실측
+// 표준값으로 합성(옷 소스 VRM 도 동일: toony 0.95 · shift -0.05 · shade≈base×0.87).
+//
+// 아웃라인(외곽선)은 의도적으로 안 붙인다: 소매단·프릴 등 촘촘한 의류 지오메트리에선 BackSide 확장
+// 외곽선이 겹쳐 검은 뭉침으로 보였다. 실루엣 외곽선은 base 몸체가 이미 갖고 있으므로 셰이딩 톤만 맞춘다.
+const MTOON_SHADE_MUL = 0.87 // 저작 shade 가 대략 base×0.85~0.9 라 그 중간값으로 근사
+
+function toMToon(src: THREE.Material): MToonMaterial {
+  const std = src as THREE.MeshStandardMaterial
+  const color = (std.color ?? new THREE.Color(1, 1, 1)).clone()
+  const mat = new MToonMaterial({})
+  mat.name = src.name
+  // 표면 속성 이식
+  mat.color = color
+  mat.map = std.map ?? null
+  mat.normalMap = std.normalMap ?? null
+  if (std.normalScale) mat.normalScale.copy(std.normalScale)
+  mat.emissiveMap = std.emissiveMap ?? null
+  if (std.emissive) mat.emissive = std.emissive.clone()
+  mat.transparent = src.transparent
+  mat.opacity = src.opacity
+  mat.alphaTest = src.alphaTest
+  mat.depthWrite = src.depthWrite
+  mat.side = src.side
+  // 툰 셰이딩 — base 몸체/얼굴과 동일 표준값(male_base.vrm 실측, 옷 소스 VRM 도 동일).
+  mat.shadeColorFactor = color.clone().multiplyScalar(MTOON_SHADE_MUL)
+  mat.shadeMultiplyTexture = std.map ?? null
+  mat.shadingToonyFactor = 0.95
+  mat.shadingShiftFactor = -0.05
+  // 알파 컷아웃(레이스/프릴, alphaMode MASK) 동기화: MToon 은 alphaTest 임계값을 별도 uniform 으로
+  // 들고 매 프레임 update(delta) 에서만 갱신한다(VRM 본체는 three-vrm 가 틱해 줌). 수동 생성한 옷
+  // 머티리얼은 틱되지 않으므로 uniform 이 0 으로 남아 컷아웃이 버려지지 않고 투명영역의 검정이 찍힌다.
+  // 옷은 UV 애니메이션이 없어 생성 시 1회 동기화로 충분하다.
+  mat.uniforms.alphaTest.value = mat.alphaTest
+  return mat
+}
+
+// 메시의 PBR 머티리얼을 MToon 으로 교체한다. 멀티프리미티브 파츠(예: 여자1 원피스 = 1메시 4프리미티브
+// → 머티리얼 배열 + 지오 그룹)도 슬롯별로 변환한다. 지오 그룹은 그대로 두므로 매핑 보존. 이미 MToon 이면 통과.
+function convertPartToMToon(mesh: THREE.Mesh): void {
+  const orig = mesh.material
+  const list = Array.isArray(orig) ? orig : [orig]
+  if (list.every((m) => m instanceof MToonMaterial)) return
+  const converted = list.map((m) => (m instanceof MToonMaterial ? m : toMToon(m)))
+  list.forEach((m) => { if (!(m instanceof MToonMaterial)) m.dispose() })
+  mesh.material = Array.isArray(orig) ? converted : converted[0]
+}
+
 // authored GLB 파츠 1개를 로드해 base VRM 에 조립한다.
 //   - 스킨드 파츠(상의/하의/스킨 헤어): SkinnedMesh 를 base 스켈레톤으로 rebind 후 scene 에 add
 //   - 리지드 파츠(고정 헤어): 스킨드 메시가 없으면 head 원시 본에 통째로 parent
@@ -115,6 +166,7 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
     // 스킨드 파츠: 메시만 떼어 base 스켈레톤에 rebind
     for (const sm of skinned) {
       rebindToBase(sm, baseBoneByName, missingBones)
+      convertPartToMToon(sm) // PBR → MToon (베이스 툰과 톤 일치)
       sm.removeFromParent()
       baseVrm.scene.add(sm)
     }
@@ -122,6 +174,10 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
     // 리지드 파츠: head 원시 본에 통째로 부착
     const headRaw = baseVrm.humanoid.getRawBoneNode(VRMHumanBoneName.Head)
     if (headRaw) {
+      gltf.scene.traverse((o) => {
+        const m = o as THREE.Mesh
+        if (m.isMesh) convertPartToMToon(m)
+      })
       headRaw.add(gltf.scene)
       rigid.push(gltf.scene)
     }
