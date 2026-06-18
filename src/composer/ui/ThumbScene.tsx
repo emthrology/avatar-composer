@@ -10,9 +10,8 @@ import { PartCategory, VARIANTS_BY_ID } from '../constants'
 // 으로 MToon 보존, GLB(옷)는 plain PBR. 바운딩박스 fit 카메라로 카테고리 무관 자동 프레이밍.
 // 로드+프레이밍 완료 시 window.__thumbReady=true → scripts/renderThumbs.mjs(puppeteer)가 스냅샷.
 
-// 카테고리별 여백(작을수록 꽉 참). 얼굴은 타이트, 옷/헤어는 약간 여유.
-// (face 는 Face merged 바운딩 반경이 커서 1.x 면 작게 잡힘 → <1 로 당겨 얼굴 클로즈업)
-const PADDING: Record<PartCategory, number> = { face: 0.5, hair: 1.15, tops: 1.12, bottoms: 1.12 }
+// 카테고리별 여백(작을수록 꽉 참). 인덱스 정점 bbox(아래) 기준 — 얼굴도 정확히 잡혀 0.9 면 전체 안착.
+const PADDING: Record<PartCategory, number> = { face: 0.9, hair: 0.95, tops: 1.12, bottoms: 1.12 }
 // 옷(tops/bottoms)은 A-pose 라 팔이 벌어져 가로로 넓다 → fit 하면 작아짐.
 // 몸통/다리 폭(±halfWidth)으로 X 를 크롭해 해당 부위를 세로로 꽉 채운다(클로즈업, 팔은 프레임 밖).
 const CROP_HALF_X: Partial<Record<PartCategory, number>> = { tops: 0.22, bottoms: 0.22 }
@@ -24,11 +23,19 @@ function FitCamera({ object, category }: { object: THREE.Object3D; category: Par
     // 허리로 잡혀 파츠가 작고 위로 치우침). SkinnedMesh 는 변형 없는 bind pose 정점 범위.
     object.updateWorldMatrix(true, true)
     const box = new THREE.Box3()
+    const v = new THREE.Vector3()
     object.traverse((o) => {
       const m = o as THREE.Mesh
-      if (m.isMesh && m.geometry) {
-        m.geometry.computeBoundingBox()
-        if (m.geometry.boundingBox) box.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld))
+      const pos = m.isMesh && m.geometry ? m.geometry.attributes.position : null
+      if (!pos) return
+      // ★ 인덱스된 정점만 합산. 프리미티브 필터로 메시 일부만 남긴 경우(female 헤어 HairBack 은 Body
+      //   메시의 한 프리미티브 → POSITION 버퍼를 Body 전체와 공유) computeBoundingBox()는 전체 속성을
+      //   훑어 몸 전체 범위를 잡는다. 실제 렌더되는 삼각형(index) 정점만 봐야 올바른 크기.
+      const idx = m.geometry.index
+      const n = idx ? idx.count : pos.count
+      for (let i = 0; i < n; i++) {
+        v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(m.matrixWorld)
+        box.expandByPoint(v)
       }
     })
     if (box.isEmpty()) return

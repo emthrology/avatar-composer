@@ -174,7 +174,8 @@ export async function loadPart(url: string, baseVrm: VRM): Promise<LoadedPart> {
 //   그리고 스탠드인은 base 보다 2.5cm 커서 헤어도 그만큼 떠 보임(④와 동일, loadPart 버그 아님).
 
 export interface LoadedSpringPart {
-  mesh: THREE.SkinnedMesh | null
+  mesh: THREE.SkinnedMesh | null // 첫 메시(호환용); 전체는 meshes
+  meshes: THREE.SkinnedMesh[] // 헤어 메시 전체(female 은 앞머리+뒷머리 2개)
   graftedBones: THREE.Object3D[] // base Head 아래로 이식된 헤어 스프링 본 루트
   mergedJoints: number // base 매니저에 병합된 스프링 조인트 수
   missingBones: string[]
@@ -205,20 +206,17 @@ export async function loadSpringPart(url: string, baseVrm: VRM): Promise<LoadedS
     }
   }
 
-  // 2) 헤어 SkinnedMesh 를 base 스켈레톤으로 rebind (이식된 헤어 본은 이제 base scene 에 있어 매칭됨)
-  // TODO(female-hair): 여기서 '첫 SkinnedMesh 1개'만 잡는다. female 헤어는 2메시 분산
-  //   (앞머리 Hair001 + 뒷머리 HairBack/Body 용접)이라 멀티-메시 추출이 필요하고, 그때는 이 픽을
-  //   '모든 SkinnedMesh 루프'로 바꿔 각각 rebind + dispose/visible 전체 처리해야 한다(스프링본 graft·
-  //   조인트 병합은 이미 개수 무관). 별도 PR.
-  let mesh: THREE.SkinnedMesh | null = null
+  // 2) 헤어 SkinnedMesh(들)을 base 스켈레톤으로 rebind (이식된 헤어 본은 이제 base scene 에 있어 매칭됨).
+  //    female 헤어는 앞머리(Hair001) + 뒷머리(HairBack) 2메시 분산이라 '모든 SkinnedMesh'를 처리한다.
+  //    male 단일 헤어도 같은 경로(N=1). 스프링본 graft·조인트 병합은 이미 개수 무관.
+  const meshes: THREE.SkinnedMesh[] = []
   partVrm.scene.traverse((o) => {
     const sm = o as THREE.SkinnedMesh
-    if (sm.isSkinnedMesh && !mesh) mesh = sm
+    if (sm.isSkinnedMesh) meshes.push(sm)
   })
   const missingBones: string[] = []
-  if (mesh) {
-    const m = mesh as THREE.SkinnedMesh
-    const baseBoneByName = indexBaseBones(baseVrm) // 이식 후 호출 → 헤어 본 포함
+  const baseBoneByName = indexBaseBones(baseVrm) // 이식 후 호출 → 헤어 본 포함
+  for (const m of meshes) {
     rebindToBase(m, baseBoneByName, missingBones)
     m.removeFromParent()
     baseVrm.scene.add(m)
@@ -244,8 +242,7 @@ export async function loadSpringPart(url: string, baseVrm: VRM): Promise<LoadedS
       for (const j of merged) baseMgr.deleteJoint(j as any)
     }
     for (const b of graftedBones) b.removeFromParent()
-    if (mesh) {
-      const m = mesh as THREE.SkinnedMesh
+    for (const m of meshes) {
       m.removeFromParent()
       m.geometry.dispose()
       const mats = Array.isArray(m.material) ? m.material : [m.material]
@@ -253,9 +250,9 @@ export async function loadSpringPart(url: string, baseVrm: VRM): Promise<LoadedS
     }
   }
 
-  const setVisible = (v: boolean) => { if (mesh) (mesh as THREE.SkinnedMesh).visible = v }
+  const setVisible = (v: boolean) => { for (const m of meshes) m.visible = v }
 
-  return { mesh, graftedBones, mergedJoints, missingBones, setVisible, dispose }
+  return { mesh: meshes[0] ?? null, meshes, graftedBones, mergedJoints, missingBones, setVisible, dispose }
 }
 
 // ─── ⑦ 얼굴 교체 (B트랙: 모양 변형) ──────────────────────────────────────────
