@@ -3,6 +3,9 @@
 avatar-composer의 최종 목적지는 **drei-avatar-project에 흡수 통합**이다. 이 문서는 통합 시 무엇을
 들어올리고 무엇을 버리는지 결정을 **그때그때 한 줄로 적어** "쌓이다 허들"이 되는 걸 막는 원장(ledger)이다.
 
+> 양쪽 코드의 **실제 괴리 지도**(스택 정합·영역별 갭·접합부·이관 순서)는 [INTEGRATION_GAP.md](INTEGRATION_GAP.md).
+> 이 문서가 *결정 원장*, 그쪽이 *실사 스냅샷*. 통합 작업은 drei-avatar-project 세션에서 진행한다.
+
 ## 방향 (확정)
 
 - **흡수(A)**: drei가 호스트, composer 엔진을 그 **에디터 탭**의 조립 시스템으로 이관.

@@ -32,6 +32,7 @@ npm run dev    # http://localhost:5173
 - [VROID_PARTS.md](VROID_PARTS.md) — VRoid 부위별 추출 가능 범위 + 라이브러리화 과제
 - [ASSET_SPEC.md](ASSET_SPEC.md) — 외주 핸드오프 사양 (베이스 규약 실측값)
 - [DECISIONS.md](DECISIONS.md) — 의사결정 로그 (ADR): 분기·에셋전략·베이스 결정 근거
+- [INTEGRATION.md](INTEGRATION.md) · [INTEGRATION_GAP.md](INTEGRATION_GAP.md) — drei 흡수 통합: 결정 원장 + 괴리 실사
 
 ## 구조
 ```
