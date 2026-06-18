@@ -61,10 +61,13 @@ const JOBS = [
   { src: 'female1/parts/female_face_2.vrm', mesh: 'Face', out: 'female1/Face_2.vrm', vrm: true, nsBones: 'FaceEye' },
   { src: 'female1/parts/female_face_3.vrm', mesh: 'Face', out: 'female1/Face_3.vrm', vrm: true, nsBones: 'FaceEye' },
   { src: 'female1/parts/female_face_4.vrm', mesh: 'Face', out: 'female1/Face_4.vrm', vrm: true, nsBones: 'FaceEye' },
-  // 헤어(hair_1~4) 보류: 앞머리(Hair001 메시)+뒷머리(HairBack, Body 병합)가 2메시 분산 →
-  //   단일-메시 추출기로는 앞머리만 잡혀 뒤통수가 빈다. TODO(female-hair): Hair001 메시 + Body 의
-  //   HairBack 프리미티브를 한 VRM 으로 보존하는 멀티-메시 결합 잡이 필요(현재 JOBS 는 mesh 1개+머티리얼
-  //   필터만 지원). 런타임 loadSpringPart 도 멀티-메시 루프로 확장해야 함(partLoader.ts 참조). 별도 PR.
+  // 헤어(hair_1~4): 앞머리(Hair001 메시 통째) + 뒷머리(Body 메시의 HairBack 프리미티브)가 2메시 분산
+  //   → meshes[] 멀티-타깃으로 둘 다 보존(Body 는 HairBack 머티리얼만 남김). 스프링은 Hair 체인 보존,
+  //   J_Sec_*Hair 본은 네임스페이스(다중 헤어 동시로드 충돌 방지). 런타임 loadSpringPart 가 멀티-메시 처리.
+  { src: 'female1/parts/female_hair_1.vrm', meshes: [{ mesh: 'Hair001' }, { mesh: 'Body', keepMaterial: 'HairBack' }], out: 'female1/Hair_1.vrm', vrm: true, springKeep: 'Hair', nsBones: '^J_Sec_.*Hair' },
+  { src: 'female1/parts/female_hair_2.vrm', meshes: [{ mesh: 'Hair001' }, { mesh: 'Body', keepMaterial: 'HairBack' }], out: 'female1/Hair_2.vrm', vrm: true, springKeep: 'Hair', nsBones: '^J_Sec_.*Hair' },
+  { src: 'female1/parts/female_hair_3.vrm', meshes: [{ mesh: 'Hair001' }, { mesh: 'Body', keepMaterial: 'HairBack' }], out: 'female1/Hair_3.vrm', vrm: true, springKeep: 'Hair', nsBones: '^J_Sec_.*Hair' },
+  { src: 'female1/parts/female_hair_4.vrm', meshes: [{ mesh: 'Hair001' }, { mesh: 'Body', keepMaterial: 'HairBack' }], out: 'female1/Hair_4.vrm', vrm: true, springKeep: 'Hair', nsBones: '^J_Sec_.*Hair' },
 ]
 
 function parseGLB(path) {
@@ -232,23 +235,29 @@ function pruneVrm(path) {
 function runJob(job) {
   const { json: g, bin } = parseGLB(`${DIR}/${job.src}`)
 
-  // 타깃 mesh 인덱스
-  const meshIdx = g.meshes.findIndex((m) => new RegExp(job.mesh, 'i').test(m.name))
-  if (meshIdx < 0) throw new Error(`${job.src}: mesh "${job.mesh}" 없음`)
+  // 타깃 mesh — 단일(job.mesh) 또는 멀티(job.meshes[{mesh, keepMaterial}]) 통일 처리.
+  const targets = job.meshes ?? [{ mesh: job.mesh, keepMaterial: job.keepMaterial }]
+  const keepIdx = new Set()
+  const outName = job.out.split('/').pop().replace(/\.\w+$/, '')
+  targets.forEach((t, ti) => {
+    const mi = g.meshes.findIndex((m) => new RegExp(t.mesh, 'i').test(m.name))
+    if (mi < 0) throw new Error(`${job.src}: mesh "${t.mesh}" 없음`)
+    // 머티리얼 필터(있으면) — 그 mesh 안에서 해당 프리미티브만 남김
+    if (t.keepMaterial) {
+      const kept = g.meshes[mi].primitives.filter((p) =>
+        (g.materials?.[p.material]?.name ?? '').includes(t.keepMaterial),
+      )
+      if (!kept.length) throw new Error(`${job.src}: material "${t.keepMaterial}" 없음 (mesh ${t.mesh})`)
+      g.meshes[mi].primitives = kept
+    }
+    // 멀티 타깃이면 출력명에 인덱스 suffix(메시 이름 고유화)
+    g.meshes[mi].name = targets.length > 1 ? `${outName}_${ti}` : outName
+    keepIdx.add(mi)
+  })
 
-  // 머티리얼 필터(있으면) — 타깃 mesh 안에서 해당 프리미티브만 남김
-  if (job.keepMaterial) {
-    const kept = g.meshes[meshIdx].primitives.filter((p) =>
-      (g.materials?.[p.material]?.name ?? '').includes(job.keepMaterial),
-    )
-    if (!kept.length) throw new Error(`${job.src}: material "${job.keepMaterial}" 없음`)
-    g.meshes[meshIdx].primitives = kept
-  }
-  g.meshes[meshIdx].name = job.out.split('/').pop().replace(/\.\w+$/, '')
-
-  // 나머지 mesh 는 노드 참조 제거(렌더 끊기) — node·accessor 인덱스는 유지
+  // 보존 대상 외 mesh 는 노드 참조 제거(렌더 끊기) — node·accessor 인덱스는 유지
   g.nodes.forEach((n) => {
-    if (n.mesh !== undefined && n.mesh !== meshIdx) delete n.mesh
+    if (n.mesh !== undefined && !keepIdx.has(n.mesh)) delete n.mesh
   })
 
   if (job.vrm) {
@@ -258,6 +267,21 @@ function runJob(job) {
       sb.springs = sb.springs.filter((s) =>
         s.joints?.some((j) => (g.nodes[j.node]?.name ?? '').includes(job.springKeep)),
       )
+    }
+    // 표정 morphTargetBinds 중 드롭된(렌더 안 되는) 메시를 가리키는 바인드 제거. 안 그러면 three-vrm
+    //   VRMExpressionLoaderPlugin 이 없는 메시의 모프에 접근해 터진다(null.every). 헤어처럼 Face 를
+    //   드롭한 파츠는 14개 전부 dangling → 비워짐(헤어는 표정 불필요). 얼굴 파츠는 Face 보존이라 유지.
+    const rendered = new Set(g.nodes.filter((n) => n.mesh !== undefined).map((n) => n.mesh))
+    const expr = g.extensions?.VRMC_vrm?.expressions
+    for (const grp of [expr?.preset, expr?.custom]) {
+      for (const v of Object.values(grp || {})) {
+        if (v.morphTargetBinds) {
+          v.morphTargetBinds = v.morphTargetBinds.filter((b) => {
+            const nd = g.nodes[b.node]
+            return nd && nd.mesh !== undefined && rendered.has(nd.mesh)
+          })
+        }
+      }
     }
   } else {
     // GLB: VRM 확장 제거(순수 GLTFLoader)
@@ -280,7 +304,7 @@ function runJob(job) {
   }
 
   fs.writeFileSync(`${DIR}/${job.out}`, packGLB(g, bin))
-  return { meshIdx, renamed }
+  return { renamed }
 }
 
 for (const job of JOBS) {

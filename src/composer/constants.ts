@@ -100,8 +100,6 @@ export const CHARACTERS: CharacterDef[] = [
   },
   {
     id: 'female1', label: '여자1', baseUrl: '/avatars/female1/female_base.vrm',
-    // hair 생략(의도적): female 헤어는 2메시 분산(앞머리 Hair001 + 뒷머리 HairBack/Body 용접)이라
-    //   단일-메시 추출기/loadSpringPart 로 온전히 안 나옴 → 별도 PR(반쪽 헤어 금지). 자세히는 후속 트랙.
     catalog: [
       {
         id: 'face', label: 'Face', kind: 'face', allowNone: true,
@@ -109,6 +107,17 @@ export const CHARACTERS: CharacterDef[] = [
           { id: 'f1-face-2', label: '얼굴 2', url: '/avatars/female1/Face_2.vrm', thumb: thumb('f1-face-2') },
           { id: 'f1-face-3', label: '얼굴 3', url: '/avatars/female1/Face_3.vrm', thumb: thumb('f1-face-3') },
           { id: 'f1-face-4', label: '얼굴 4', url: '/avatars/female1/Face_4.vrm', thumb: thumb('f1-face-4') },
+        ],
+      },
+      {
+        // female 헤어 = 앞머리(Hair001) + 뒷머리(HairBack) 2메시 결합 추출(extractParts meshes[]),
+        //   런타임 loadSpringPart 가 멀티-메시 처리. 스프링 물리 보존(kind:'spring').
+        id: 'hair', label: 'Hair', kind: 'spring', allowNone: true,
+        variants: [
+          { id: 'f1-hair-1', label: '헤어 1', url: '/avatars/female1/Hair_1.vrm', thumb: thumb('f1-hair-1') },
+          { id: 'f1-hair-2', label: '헤어 2', url: '/avatars/female1/Hair_2.vrm', thumb: thumb('f1-hair-2') },
+          { id: 'f1-hair-3', label: '헤어 3', url: '/avatars/female1/Hair_3.vrm', thumb: thumb('f1-hair-3') },
+          { id: 'f1-hair-4', label: '헤어 4', url: '/avatars/female1/Hair_4.vrm', thumb: thumb('f1-hair-4') },
         ],
       },
       {
