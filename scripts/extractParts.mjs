@@ -62,7 +62,9 @@ const JOBS = [
   { src: 'female1/parts/female_face_3.vrm', mesh: 'Face', out: 'female1/Face_3.vrm', vrm: true, nsBones: 'FaceEye' },
   { src: 'female1/parts/female_face_4.vrm', mesh: 'Face', out: 'female1/Face_4.vrm', vrm: true, nsBones: 'FaceEye' },
   // 헤어(hair_1~4) 보류: 앞머리(Hair001 메시)+뒷머리(HairBack, Body 병합)가 2메시 분산 →
-  //   단일-메시 추출기 확장 필요(다음 창).
+  //   단일-메시 추출기로는 앞머리만 잡혀 뒤통수가 빈다. TODO(female-hair): Hair001 메시 + Body 의
+  //   HairBack 프리미티브를 한 VRM 으로 보존하는 멀티-메시 결합 잡이 필요(현재 JOBS 는 mesh 1개+머티리얼
+  //   필터만 지원). 런타임 loadSpringPart 도 멀티-메시 루프로 확장해야 함(partLoader.ts 참조). 별도 PR.
 ]
 
 function parseGLB(path) {
