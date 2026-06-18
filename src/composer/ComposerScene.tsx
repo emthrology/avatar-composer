@@ -3,17 +3,32 @@ import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { AvatarComposer } from './AvatarComposer'
 import { CatalogPicker } from './ui/CatalogPicker'
-import { CATALOG, PartCategory, PartStatus, Selection, defaultSelection } from './constants'
+import { CHARACTERS, CharacterId, PartCategory, PartStatus, Selection, defaultSelection, getCharacter } from './constants'
 
 // 에셋 조립 씬 — 좌측 VRoid식 카탈로그 피커(탭+그리드), 우측 3D + 접이식 dev 드로어.
 const MORPHS = ['happy', 'angry', 'sad', 'surprised', 'aa', 'oh'] as const
 
+const idleStatus = (character: ReturnType<typeof getCharacter>): Record<string, PartStatus> =>
+  Object.fromEntries(character.catalog.map((c) => [c.id, 'idle']))
+
 export function ComposerScene() {
-  const [selection, setSelection] = useState<Selection>(defaultSelection)
+  // 캐릭터(base) 축 — base 를 바꾸면 그 base 의 카탈로그로 통째 스왑(파츠 동반).
+  const [characterId, setCharacterId] = useState<CharacterId>('male1')
+  const character = getCharacter(characterId)
+
+  const [selection, setSelection] = useState<Selection>(() => defaultSelection(getCharacter('male1').catalog))
   const [eyeColor, setEyeColor] = useState<string | null>(null)
-  const [partStatus, setPartStatus] = useState<Record<string, PartStatus>>(
-    () => Object.fromEntries(CATALOG.map((c) => [c.id, 'idle'])),
-  )
+  const [partStatus, setPartStatus] = useState<Record<string, PartStatus>>(() => idleStatus(getCharacter('male1')))
+
+  // base 전환: 선택·상태·눈색을 새 캐릭터 기준으로 리셋(이전 base 파츠 키 잔류 방지).
+  const onCharacter = useCallback((id: CharacterId) => {
+    if (id === characterId) return
+    const next = getCharacter(id)
+    setCharacterId(id)
+    setSelection(defaultSelection(next.catalog))
+    setPartStatus(idleStatus(next))
+    setEyeColor(null)
+  }, [characterId])
 
   // dev 드로어(스캐폴딩 격리)
   const [devOpen, setDevOpen] = useState(false)
@@ -35,15 +50,31 @@ export function ComposerScene() {
 
   return (
     <div className="flex w-full h-full bg-gray-950 text-gray-100">
-      {/* 좌측: 카탈로그 피커 */}
-      <div className="w-72 shrink-0 border-r border-gray-800 bg-gray-900">
-        <CatalogPicker
-          selection={selection}
-          status={partStatus}
-          onSelect={onSelect}
-          eyeColor={eyeColor}
-          onEyeColor={setEyeColor}
-        />
+      {/* 좌측: 캐릭터 셀렉터 + 카탈로그 피커 */}
+      <div className="w-72 shrink-0 border-r border-gray-800 bg-gray-900 flex flex-col">
+        <div className="flex items-center gap-1 p-2 border-b border-gray-800">
+          {CHARACTERS.map((ch) => (
+            <button
+              key={ch.id}
+              onClick={() => onCharacter(ch.id)}
+              className={`flex-1 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                characterId === ch.id ? 'bg-sky-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+              }`}
+            >
+              {ch.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 min-h-0">
+          <CatalogPicker
+            catalog={character.catalog}
+            selection={selection}
+            status={partStatus}
+            onSelect={onSelect}
+            eyeColor={eyeColor}
+            onEyeColor={setEyeColor}
+          />
+        </div>
       </div>
 
       {/* 우측: 3D + dev 드로어 */}
@@ -53,6 +84,7 @@ export function ComposerScene() {
           <directionalLight position={[1, 2, 2]} intensity={1.3} />
           <Suspense fallback={null}>
             <AvatarComposer
+              key={characterId} baseUrl={character.baseUrl} catalog={character.catalog}
               hair={hair} shirt={shirt} morph={morph} morphName={morphName} wave={wave}
               selection={selection} eyeColor={eyeColor} onReport={setReport} onPartStatus={onPartStatus}
             />

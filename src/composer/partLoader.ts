@@ -206,6 +206,10 @@ export async function loadSpringPart(url: string, baseVrm: VRM): Promise<LoadedS
   }
 
   // 2) 헤어 SkinnedMesh 를 base 스켈레톤으로 rebind (이식된 헤어 본은 이제 base scene 에 있어 매칭됨)
+  // TODO(female-hair): 여기서 '첫 SkinnedMesh 1개'만 잡는다. female 헤어는 2메시 분산
+  //   (앞머리 Hair001 + 뒷머리 HairBack/Body 용접)이라 멀티-메시 추출이 필요하고, 그때는 이 픽을
+  //   '모든 SkinnedMesh 루프'로 바꿔 각각 rebind + dispose/visible 전체 처리해야 한다(스프링본 graft·
+  //   조인트 병합은 이미 개수 무관). 별도 PR.
   let mesh: THREE.SkinnedMesh | null = null
   partVrm.scene.traverse((o) => {
     const sm = o as THREE.SkinnedMesh
@@ -337,12 +341,22 @@ export async function loadFacePart(url: string, baseVrm: VRM): Promise<LoadedFac
     meshes.push(sm)
   }
 
-  // 3) 미러 페어링: base 얼굴 ↔ 새 얼굴을 머티리얼 이름으로 1:1 매칭(양쪽 동일 8 머티리얼)
+  // 3) 미러 페어링: base 얼굴 ↔ 새 얼굴을 머티리얼 이름으로 1:1 매칭.
+  //    짝 없는 새 메시(예: female_base 엔 없는 FaceEyelash)는 donor(표정 모프를 가진 아무 base 얼굴
+  //    메시)로 폴백 — VRoid 얼굴 프리미티브는 동일 57 표정 모프를 인덱스 정렬로 공유하므로 어느 base
+  //    얼굴이든 같은 influences 를 들고 있어, donor 로 구동해도 표정이 정확히 따라온다(페어 미러와 동일한
+  //    교차파일 인덱스 정렬 가정). donor 조차 없으면(이 base 에 표정 얼굴 메시 부재) 경고만.
+  const donor = baseFaceMeshes.find((bm) => bm.morphTargetInfluences?.length) ?? null
   const pairs: { base: THREE.SkinnedMesh; neo: THREE.SkinnedMesh }[] = []
+  const unpaired: string[] = []
   for (const neo of meshes) {
-    const base = baseFaceMeshes.find((bm) => matNameOf(bm) === matNameOf(neo))
-    if (base && base.morphTargetInfluences && neo.morphTargetInfluences) pairs.push({ base, neo })
+    if (!neo.morphTargetInfluences) continue
+    const exact = baseFaceMeshes.find((bm) => matNameOf(bm) === matNameOf(neo) && bm.morphTargetInfluences)
+    const base = exact ?? donor
+    if (base) pairs.push({ base, neo })
+    if (!exact && base) unpaired.push(matNameOf(neo))
   }
+  if (unpaired.length) console.warn(`[face] base 짝 없는 메시 ${unpaired.length} → donor 폴백 미러: ${unpaired.join(', ')}`)
   // 눈 lookAt 미러: base lookAt(bone 타입)이 base 눈 본을 돌리지만, 보이는 눈은 graft 된 변형 눈 본이다.
   //   base 눈 본의 local 회전을 graft 눈 본에 복사 → 새 얼굴 눈도 같은 타깃을 추종(같은 Head 부모라 정합).
   const baseLeftEye = baseVrm.humanoid.getRawBoneNode(VRMHumanBoneName.LeftEye)

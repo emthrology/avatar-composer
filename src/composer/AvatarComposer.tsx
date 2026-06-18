@@ -3,7 +3,7 @@ import { useGLTF } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { VRMLoaderPlugin, VRM, VRMUtils, VRMHumanBoneName } from '@pixiv/three-vrm'
 import * as THREE from 'three'
-import { BASE_URL, CATALOG, PartCategory, PartStatus, Selection, VARIANTS_BY_ID } from './constants'
+import { PartCategory, PartCategoryDef, PartStatus, Selection, VARIANTS_BY_ID } from './constants'
 import { makeHairCap, makeShirtShell, attachHair, disposeObject } from './dummyParts'
 import { loadPart, loadSpringPart, loadFacePart, LoadedPart, LoadedSpringPart, LoadedFacePart } from './partLoader'
 
@@ -11,6 +11,8 @@ type AnyLoadedPart = LoadedPart | LoadedSpringPart | LoadedFacePart
 interface Slot { variantId: string; loaded: AnyLoadedPart }
 
 interface Props {
+  baseUrl: string
+  catalog: PartCategoryDef[]
   hair: boolean
   shirt: boolean
   morph: number
@@ -22,7 +24,7 @@ interface Props {
   onPartStatus: (id: string, status: PartStatus) => void
 }
 
-export function AvatarComposer({ hair, shirt, morph, morphName, wave, selection, eyeColor, onReport, onPartStatus }: Props) {
+export function AvatarComposer({ baseUrl, catalog, hair, shirt, morph, morphName, wave, selection, eyeColor, onReport, onPartStatus }: Props) {
   const vrmRef = useRef<VRM | null>(null)
   const hairRef = useRef<THREE.Object3D | null>(null)
   const shirtRef = useRef<THREE.SkinnedMesh | null>(null)
@@ -38,7 +40,7 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, selection,
   eyeColorRef.current = eyeColor
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const gltf = useGLTF(BASE_URL, true, true, (loader: any) => {
+  const gltf = useGLTF(baseUrl, true, true, (loader: any) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     loader.register((parser: any) => new VRMLoaderPlugin(parser as any))
   })
@@ -69,8 +71,11 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, selection,
       if (hairRef.current) { hairRef.current.removeFromParent(); disposeObject(hairRef.current); hairRef.current = null }
       if (shirtRef.current) { shirtRef.current.removeFromParent(); disposeObject(shirtRef.current); shirtRef.current = null }
       VRMUtils.deepDispose(vrm.scene)
+      // deepDispose 가 drei useGLTF 캐시 씬을 파괴 → 캐시에서 드롭해 재진입(base 스위치) 시 새로 로드.
+      // (대안: base 미폐기로 즉시 재스위치 캐싱 — 스위치 빈번해지면 그쪽으로. 지금은 정합성 우선.)
+      useGLTF.clear(baseUrl)
     }
-  }, [vrm, onReport])
+  }, [vrm, onReport, baseUrl])
 
   // ─── 슬롯 선택·교체 엔진 ────────────────────────────────────────────────────
   // 카테고리별 desired(selection) vs 현재 슬롯 diff → 다르면 기존 dispose 후 새 변형 load.
@@ -107,8 +112,8 @@ export function AvatarComposer({ hair, shirt, morph, morphName, wave, selection,
         onPartStatus(cat, 'error')
       }
     }
-    CATALOG.forEach((c) => apply(c.id, selection[c.id] ?? null))
-  }, [vrm, selection, onPartStatus])
+    catalog.forEach((c) => apply(c.id, selection[c.id] ?? null))
+  }, [vrm, selection, onPartStatus, catalog])
 
   useEffect(() => { if (hairRef.current) hairRef.current.visible = hair }, [hair])
   useEffect(() => { if (shirtRef.current) shirtRef.current.visible = shirt }, [shirt])

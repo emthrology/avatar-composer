@@ -18,5 +18,10 @@ public/avatars/male1/Bottoms_jean.glb
 public/avatars/male1/Bottoms_white_pants.glb
 public/avatars/male1/Face_eyesample.vrm
 
+# female1 파생 파츠(GLB/VRM) — male1 과 동일 정책(소스 VRM 에서 재생성, 리포 제외).
+#   female1/female_base.vrm 과 female1/parts/ 소스는 커밋(아래 패턴이 안 건드림).
+public/avatars/female1/*.glb
+public/avatars/female1/Face_*.vrm
+
 # 파생 썸네일(PNG)은 ★커밋★한다 — puppeteer 가 필요해 Vercel 빌드에서 재생성 불가.
 #   소스처럼 취급: 소스 VRM 변경 시 npm run assets 로 갱신 후 커밋. (public/avatars/thumbs/)
